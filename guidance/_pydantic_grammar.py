@@ -37,14 +37,14 @@ def gen_str(**kwds) -> GrammarFunction:
     return Join([_QUOTE, gen(**kwds, stop='"'), _QUOTE])
 
 
-def gen_list(type: Type, opener: Byte, closer: Byte) -> GrammarFunction:
+def gen_list(type: Type) -> GrammarFunction:
     s = Select([], capture_name=None, recursive=True)
     s.values = [gen_type(type), Join([s,  _COMMA,  gen_type(type)])]
-    return _OPEN_BRACKET + select([closer, Join([s, _CLOSE_BRACKET])])
+    return _OPEN_BRACKET + select([_CLOSE_BRACKET, Join([s, _CLOSE_BRACKET])])
 
 
 def gen_pydantic(schema: BaseModel) -> GrammarFunction:
-    grammar = []
+    grammar = [_OPEN_BRACE]
     model_fields = schema.model_fields.items()
     for i, (field, field_info) in enumerate(model_fields):
         annotation = field_info.rebuild_annotation()
@@ -53,7 +53,7 @@ def gen_pydantic(schema: BaseModel) -> GrammarFunction:
             grammar.append(field_grammar)
         else:
             grammar.extend([_COMMA, field_grammar])
-    grammar.append(_QUOTE)
+    grammar.append(_CLOSE_BRACE)
     return Join(grammar)
 
 
