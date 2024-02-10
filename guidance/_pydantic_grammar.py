@@ -40,11 +40,33 @@ def gen_bool() -> GrammarFunction:
 
 
 def gen_int() -> GrammarFunction:
-    return gen(regex=r"(\+|\-)?\d+")
+    return Join([select(["-", ""]), select([char_range("0", "9")], recurse=True)])
 
 
 def gen_float() -> GrammarFunction:
-    return gen(regex=r"(\+|\-)?(\d*\.)?\d+")
+    return Join([
+        # Leading sign
+        select(["", "-"]),
+        # Integer part of mantissa
+        select([char_range("0", "9")], recurse=True),
+        # Optional fractional part of mantissa
+        select([
+            "",
+            Join([
+                Byte(b"."),
+                select([char_range("0", "9")], recurse=True)
+            ]),
+        ]),
+        # Optional exponent
+        select([
+            "",
+            Join([
+                "e",
+                select(["", "-", "+"]),
+                select([char_range("0", "9")], recurse=True),
+            ]),
+        ]),
+    ])
 
 
 def gen_str(**kwds) -> GrammarFunction:
