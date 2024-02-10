@@ -5,9 +5,23 @@ from annotated_types import GroupedMetadata
 from collections.abc import Collection
 from pydantic import StringConstraints, BaseModel
 from ._grammar import Null, Byte, GrammarFunction, Join, Select, select, string
+from .library._char_range import char_range
 from .library._gen import gen
 
 _QUOTE = Byte(b'"')
+_SAFE_STRING = select(
+    [
+        char_range("a", "z"),
+        char_range("A", "Z"),
+        char_range("0", "9"),
+        "_",
+        "-",
+        "'",
+        " ",
+        ",",
+    ],
+    recurse=True,
+)
 _OPEN_BRACE = Byte(b"{")
 _CLOSE_BRACE = Byte(b"}")
 _OPEN_BRACKET = Byte(b"[")
@@ -34,8 +48,10 @@ def gen_float() -> GrammarFunction:
 
 
 def gen_str(**kwds) -> GrammarFunction:
-    return Join([_QUOTE, gen(**kwds, stop='"'), _QUOTE])
-
+    if kwds:
+        # return Join([_QUOTE, gen(**kwds, stop='"'), _QUOTE]) # This seems to break the EarleyParser for list[str] ??
+        raise NotImplementedError("Constrained string generation not implemented yet.")
+    return Join([_QUOTE, _SAFE_STRING, _QUOTE])
 
 def gen_list(type: Type) -> GrammarFunction:
     s = Select([], capture_name=None, recursive=True)
