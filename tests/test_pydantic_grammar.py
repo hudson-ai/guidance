@@ -5,7 +5,7 @@ from pydantic import TypeAdapter, BaseModel, Field
 
 from guidance._grammar import GrammarFunction
 from guidance._pydantic_grammar import gen_type
-from guidance._parser import EarleyCommitParser
+from guidance._parser import EarleyCommitParser, ParserException
 
 
 def to_compact_json(target: any) -> str:
