@@ -1,5 +1,6 @@
 import json
 import pytest
+from types import NoneType
 from pydantic import TypeAdapter, BaseModel, Field
 
 from guidance._grammar import GrammarFunction
@@ -68,11 +69,6 @@ def test_integer_schema(json_int):
     # First sanity check what we're setting up
     TypeAdapter(type).validate_json(json_int)
 
-    # Now set up the actual conversion
-    grammar = gen_type(type)
-    parser = EarleyCommitParser(grammar)
-
-    # Now set up the actual conversion
     grammar = gen_type(type)
     check_string_with_grammar(json_int, grammar)
 
@@ -82,46 +78,33 @@ def test_simple_object():
         name: str
         productId: int = Field(description="The unique identifier for a product")
 
-    target_string = to_compact_json(
-        Schema(name="my product", productId=123).model_dump(mode='json')
-    )
+    target_obj = dict(name="my product", productId=123)
 
+    # First sanity check what we're setting up
+    Schema.model_validate(target_obj)
+
+    target_string = to_compact_json(target_obj)
     grammar = gen_type(Schema)
-
     check_string_with_grammar(target_string, grammar)
 
 
-# def test_nested_object():
-#     schema = """{
-#         "type": "object",
-#         "properties": {
-#             "name" : {
-#                 "type": "string"
-#             },
-#             "info": {
-#                 "type": "object",
-#                 "properties" : {
-#                     "a" : {
-#                         "type" : "integer"
-#                     },
-#                     "b" : {
-#                         "type" : "integer"
-#                     }
-#                 }
-#             }
-#         }
-#     }
-# """
-#     target_obj = dict(name="my product", info=dict(a=1, b=2))
+def test_nested_object():
+    class Info(BaseModel):
+        a: int
+        b: int
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=target_obj, schema=schema_obj)
+    class Schema(BaseModel):
+        name: str
+        info: Info
 
-#     grammar = json_schema_to_grammar(schema)
+    target_obj = dict(name="my product", info=dict(a=1, b=2))
 
-#     target_string = to_compact_json(target_obj)
-#     check_string_with_grammar(target_string, grammar)
+    # First sanity check what we're setting up
+    Schema.model_validate(target_obj)
+
+    target_string = to_compact_json(target_obj)
+    grammar = gen_type(Schema)
+    check_string_with_grammar(target_string, grammar)
 
 
 @pytest.mark.parametrize("json_list", [to_compact_json(x) for x in [[], [0], [34, 56], [1, 2, 3], [9, 8, 7, 6]]])
@@ -132,7 +115,6 @@ def test_integer_list(json_list):
     TypeAdapter(type).validate_json(json_list)
 
     grammar = gen_type(type)
-
     check_string_with_grammar(json_list, grammar)
 
 
@@ -144,139 +126,104 @@ def test_string_list(json_list):
     TypeAdapter(type).validate_json(json_list)
 
     grammar = gen_type(type)
-
     check_string_with_grammar(json_list, grammar)
 
 
-# @pytest.mark.parametrize("target_list", [[], [dict(a=1)], [dict(a=2), dict(a=3)]])
-# def test_object_list(target_list):
-#     schema = """{
-#     "type" : "array",
-#     "items" : {
-#             "type" : "object",
-#             "properties" : {
-#                 "a" : {
-#                     "type": "integer"
-#                 }
-#             }
-#         }
-#     }
-# """
+@pytest.mark.parametrize("target_list", [[], [dict(a=1)], [dict(a=2), dict(a=3)]])
+def test_object_list(target_list):
+    class Schema(BaseModel):
+        a: int
+    type = list[Schema]
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=target_list, schema=schema_obj)
+    # First sanity check what we're setting up
+    target_string = TypeAdapter(type).validate_python(target_list)
 
-#     grammar = json_schema_to_grammar(schema)
-
-#     target_string = to_compact_json(target_list)
-#     check_string_with_grammar(target_string, grammar)
+    target_string = to_compact_json(target_list)
+    grammar = gen_type(type)
+    check_string_with_grammar(target_string, grammar)
 
 
-# def test_object_containing_list():
-#     schema = """{
-#     "type": "object",
-#     "properties" : {
-#             "a" : { "type" : "string" },
-#             "b list" : {
-#                 "type": "array",
-#                 "items" : {"type": "integer" }
-#             }
-#         }
-#     }
-# """
+def test_object_containing_list():
+    class Schema(BaseModel):
+        a: str
+        b: list[int]
 
-#     target_obj = {
-#         "a": "some lengthy string of characters",
-#         "b list": [1, 2, 3, 2312, 123],
-#     }
+    target_obj = {
+        "a": "some lengthy string of characters",
+        "b": [1, 2, 3, 2312, 123],
+    }
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=target_obj, schema=schema_obj)
+    # First sanity check what we're setting up
+    Schema.model_validate(target_obj)
 
-#     grammar = json_schema_to_grammar(schema)
-
-#     target_string = to_compact_json(target_obj)
-#     check_string_with_grammar(target_string, grammar)
+    target_string = to_compact_json(target_obj)
+    grammar = gen_type(Schema)
+    check_string_with_grammar(target_string, grammar)
 
 
-# @pytest.mark.parametrize(
-#     ["bad_list", "unexpected_char"],
-#     [
-#         ("[,]", b","),
-#         ("[,1]", b","),
-#         ("[1,]", b"]"),
-#         ("[1,2,]", b"]"),
-#         ("[0,1,2,3,]", b"]"),
-#         ("[0,,1]", b","),
-#     ],
-# )
-# def test_bad_int_list(bad_list: str, unexpected_char):
-#     schema = """{
-#     "type" : "array",
-#     "items" : {
-#             "type" : "integer"
-#         }
-#     }
-# """
+@pytest.mark.parametrize(
+    ["bad_list", "unexpected_char"],
+    [
+        ("[,]", b","),
+        ("[,1]", b","),
+        ("[1,]", b"]"),
+        ("[1,2,]", b"]"),
+        ("[0,1,2,3,]", b"]"),
+        ("[0,,1]", b","),
+    ],
+)
+def test_bad_int_list(bad_list: str, unexpected_char):
+    type = list[int]
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=[1, 2, 3], schema=schema_obj)
+    # First sanity check what we're setting up
+    TypeAdapter(type).validate_python([1,2,3])
 
-#     grammar = json_schema_to_grammar(schema)
-#     parser = EarleyCommitParser(grammar)
-#     with pytest.raises(ParserException) as pe:
-#         for c in bad_list:
-#             next_byte = bytes(c, encoding="utf8")
-#             print(f"Consuming: {next_byte}")
-#             parser.consume_byte(next_byte)
-#     assert pe.value.current_byte == unexpected_char
+    grammar = gen_type(type)
+    parser = EarleyCommitParser(grammar)
+    with pytest.raises(ParserException) as pe:
+        for c in bad_list:
+            next_byte = bytes(c, encoding="utf8")
+            print(f"Consuming: {next_byte}")
+            parser.consume_byte(next_byte)
+    assert pe.value.current_byte == unexpected_char
 
 
-# @pytest.mark.parametrize("target_bool", [True, False])
-# def test_boolean(target_bool):
-#     schema = """{"type": "boolean" }"""
+@pytest.mark.parametrize("target_bool", [True, False])
+def test_boolean(target_bool):
+    type = bool
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=target_bool, schema=schema_obj)
+    # First sanity check what we're setting up
+    TypeAdapter(type).validate_python(target_bool)
 
-#     grammar = json_schema_to_grammar(schema)
-
-#     target_string = to_compact_json(target_bool)
-#     check_string_with_grammar(target_string, grammar)
+    grammar = gen_type(type)
+    target_string = to_compact_json(target_bool)
+    check_string_with_grammar(target_string, grammar)
 
 
-# @pytest.mark.parametrize(
-#     "target_number",
-#     # It appears that Inf and NaN are not actually part of the JSON spec
-#     [0, 1, -1, 134, -234762, 0.1, 1.0, -10.33, 452.342, 1.23e23, -1.2e-22],
-# )
-# def test_number(target_number):
-#     schema = """{"type": "number" }"""
+@pytest.mark.parametrize(
+    "target_number",
+    # It appears that Inf and NaN are not actually part of the JSON spec
+    [0, 1, -1, 134, -234762, 0.1, 1.0, -10.33, 452.342, 1.23e23, -1.2e-22],
+)
+def test_number(target_number):
+    type = float
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=target_number, schema=schema_obj)
+    # First sanity check what we're setting up
+    TypeAdapter(type).validate_python(target_number)
 
-#     grammar = json_schema_to_grammar(schema)
-
-#     target_string = to_compact_json(target_number)
-#     check_string_with_grammar(target_string, grammar)
+    grammar = gen_type(type)
+    target_string = to_compact_json(target_number)
+    check_string_with_grammar(target_string, grammar)
 
 
-# def test_null():
-#     schema = """{"type": "null" }"""
+def test_null():
+    type = NoneType
 
-#     target_obj = None
+    target_obj = None
 
-#     # First sanity check what we're setting up
-#     schema_obj = json.loads(schema)
-#     validate(instance=target_obj, schema=schema_obj)
+    # First sanity check what we're setting up
+    TypeAdapter(type).validate_python(target_obj)
 
-#     grammar = json_schema_to_grammar(schema)
-
-#     target_string = to_compact_json(target_obj)
-#     check_string_with_grammar(target_string, grammar)
+    grammar = gen_type(type)
+    target_string = to_compact_json(target_obj)
+    check_string_with_grammar(target_string, grammar)
