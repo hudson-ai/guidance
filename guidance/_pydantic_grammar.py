@@ -44,17 +44,17 @@ def gen_list(type: Type) -> GrammarFunction:
 
 
 def gen_pydantic(schema: BaseModel) -> GrammarFunction:
-    grammar = [_OPEN_BRACE]
+    grammar = _OPEN_BRACE
     model_fields = schema.model_fields.items()
     for i, (field, field_info) in enumerate(model_fields):
         annotation = field_info.rebuild_annotation()
         field_grammar = Join([_QUOTE, string(field), _QUOTE, _COLON, gen_type(annotation)])
         if i == 0:
-            grammar.append(field_grammar)
+            grammar = Join([grammar, field_grammar])
         else:
-            grammar.extend([_COMMA, field_grammar])
-    grammar.append(_CLOSE_BRACE)
-    return Join(grammar)
+            grammar = Join([grammar, _COMMA, field_grammar])
+    grammar = Join([grammar, _CLOSE_BRACE])
+    return grammar
 
 
 def gen_type(type: Type | None) -> GrammarFunction:
