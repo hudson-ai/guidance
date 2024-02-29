@@ -1,4 +1,4 @@
-from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence, Literal
 
 import guidance
 from guidance.library import char_range, one_or_more, optional, zero_or_more
@@ -44,6 +44,7 @@ def _gen_json_object(
     *,
     properties: Mapping[str, Any],
     definitions: Mapping[str, Callable[[], GrammarFunction]],
+    mode: Literal["json", "python"]
 ):
     lm += "{"
     properties_added = 0
@@ -54,6 +55,7 @@ def _gen_json_object(
         lm += _gen_json(
             json_schema=property_schema,
             definitions=definitions,
+            mode=mode
         )
         properties_added += 1
         if properties_added < len(properties):
@@ -68,11 +70,12 @@ def _gen_json_array(
     *,
     item_schema: Mapping[str, Any],
     definitions: Mapping[str, Callable[[], GrammarFunction]],
+    mode: Literal["json", "python"]
 ):
     lm += "["
     lm += optional(
-        zero_or_more(_gen_json(json_schema=item_schema, definitions=definitions) + ",")
-        + _gen_json(json_schema=item_schema, definitions=definitions)
+        zero_or_more(_gen_json(json_schema=item_schema, definitions=definitions, mode=mode) + ",")
+        + _gen_json(json_schema=item_schema, definitions=definitions, mode=mode)
     )
     lm += "]"
     return lm
@@ -84,9 +87,10 @@ def _process_anyOf(
     *,
     anyof_list: Sequence[MutableMapping[str, Any]],
     definitions: Mapping[str, Callable[[], GrammarFunction]],
+    mode: Literal["json", "python"]
 ):
     options = [
-        _gen_json(json_schema=item, definitions=definitions) for item in anyof_list
+        _gen_json(json_schema=item, definitions=definitions, mode=mode) for item in anyof_list
     ]
     return lm + select(options)
 
@@ -96,11 +100,12 @@ def _gen_json(
     lm,
     json_schema: Mapping[str, Any],
     definitions: Mapping[str, Callable[[], GrammarFunction]],
+    mode: Literal["json", "python"],
 ):
     ANYOF_STRING = "anyOf"
     if ANYOF_STRING in json_schema:
         return lm + _process_anyOf(
-            anyof_list=json_schema[ANYOF_STRING], definitions=definitions
+            anyof_list=json_schema[ANYOF_STRING], definitions=definitions, mode=mode
         )
 
     REF_STRING = "$ref"
@@ -112,9 +117,15 @@ def _gen_json(
 
     result = None
     if target_type == "null":
-        result = "null"
+        if mode == "json":
+            result = "null"
+        elif mode == "python":
+            return "None"
     elif target_type == "boolean":
-        result = select(["true", "false"])
+        if mode == "json":
+            result = select(["true", "false"])
+        else:
+            result = select(["True", "False"])
     elif target_type == "integer":
         result = _gen_json_int()
     elif target_type == "number":
@@ -123,14 +134,14 @@ def _gen_json(
         result = _gen_json_string()
     elif target_type == "array":
         result = _gen_json_array(
-            item_schema=json_schema["items"], definitions=definitions
+            item_schema=json_schema["items"], definitions=definitions, mode=mode
         )
     elif target_type == "object":
         if object_schema is None:
             object_properties = json_schema["properties"]
         else:
             object_properties = object_schema["properties"]
-        result = _gen_json_object(properties=object_properties, definitions=definitions)
+        result = _gen_json_object(properties=object_properties, definitions=definitions, mode=mode)
     else:
         raise ValueError(f"Unsupported type in schema: {json_schema['type']}")
 
@@ -138,17 +149,20 @@ def _gen_json(
 
 
 @guidance(stateless=True)
-def gen_json(lm, json_schema: Mapping[str, Any], name: Optional[str] = None):
+def gen_json(lm, json_schema: Mapping[str, Any], name: Optional[str] = None, mode: Literal["json", "python"] = "json"):
+    if mode not in ["json", "python"]:
+        raise ValueError(f"Invalid value for 'mode'. Expected one of ['json', 'python'], got {mode!r}")
+ 
     _DEFS_KEY = "$defs"
     definitions = {}
     if _DEFS_KEY in json_schema:
-        definitions = _build_definitions(json_schema[_DEFS_KEY])
+        definitions = _build_definitions(json_schema[_DEFS_KEY], mode=mode)
 
-    return lm + guidance.capture(_gen_json(json_schema, definitions), name=name)
+    return lm + guidance.capture(_gen_json(json_schema, definitions, mode=mode), name=name)
 
 
 def _build_definitions(
-    raw_definitions: Mapping[str, Any]
+    raw_definitions: Mapping[str, Any], mode: Literal["json", "python"]
 ) -> Mapping[str, Callable[[], GrammarFunction]]:
     definitions = {}
 
@@ -157,7 +171,7 @@ def _build_definitions(
     ) -> Callable[[], GrammarFunction]:
         @guidance(stateless=True, dedent=False)
         def closure(lm):
-            return lm + _gen_json(json_schema=json_schema, definitions=definitions)
+            return lm + _gen_json(json_schema=json_schema, definitions=definitions, mode=mode)
 
         return closure
 
