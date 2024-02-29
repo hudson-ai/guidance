@@ -1,7 +1,9 @@
 import json
+import ast
 import os
 
-from typing import Any
+from pydantic import TypeAdapter
+from typing import Any, TypeVar
 
 import pytest
 
@@ -91,3 +93,10 @@ def to_compact_json(target: Any) -> str:
     # output, we don't need to worry about pretty printing
     # and whitespace
     return json.dumps(target, separators=(",", ":"))
+
+
+T = TypeVar("T")
+def python_loads(type: type[T], string: str) -> T:
+    obj = ast.literal_eval(string)
+    typed_obj = TypeAdapter(type).validate_python(obj)
+    return typed_obj
