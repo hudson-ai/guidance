@@ -38,6 +38,9 @@ def _decorator(f, *, stateless, cache, dedent, model):
         if cache:
             f = functools.cache(f)
 
+        # closure variable to denote whether we've detected recursion
+        recursive = False
+
         @functools.wraps(f)
         def wrapped(*args, **kwargs):
 
@@ -47,6 +50,8 @@ def _decorator(f, *, stateless, cache, dedent, model):
                 # if we have a placeholder set then we must be in a recursive definition and so we return the placeholder
                 placeholder = getattr(f, "_self_call_placeholder_", None)
                 if placeholder is not None:
+                    nonlocal recursive
+                    recursive = True
                     return placeholder
                 
                 # otherwise we call the function to generate the grammar
@@ -64,6 +69,9 @@ def _decorator(f, *, stateless, cache, dedent, model):
 
                     # replace all the placeholders with our generated node
                     if no_args:
+                        if recursive:
+                            # only overwrite in the affirmative case
+                            node.recursive = True
                         replace_grammar_node(node, f._self_call_placeholder_, node)
                         del f._self_call_placeholder_
 
