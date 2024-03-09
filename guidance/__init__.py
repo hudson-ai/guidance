@@ -69,11 +69,12 @@ def _decorator(f, *, stateless, cache, dedent, model):
 
                     # replace all the placeholders with our generated node
                     if no_args:
-                        if recursive:
-                            # only overwrite in the affirmative case
-                            node.recursive = True
                         replace_grammar_node(node, f._self_call_placeholder_, node)
                         del f._self_call_placeholder_
+
+                    if recursive:
+                        # only overwrite in the affirmative case
+                        node.recursive = True
 
                     return node
 
