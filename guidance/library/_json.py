@@ -2,7 +2,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, Union
 from json import dumps as json_dumps
 
 import guidance
-from guidance.library import char_range, one_or_more, optional, zero_or_more
+from guidance.library import char_range, one_or_more, optional, zero_or_more, regex
 
 from .._grammar import GrammarFunction, select
 
@@ -31,19 +31,22 @@ def _gen_json_number(lm):
 
 
 @guidance(stateless=True)
-def _gen_json_string(lm):
-    string_chars = select(
-        [
-            char_range("a", "z"),
-            char_range("A", "Z"),
-            char_range("0", "9"),
-            *[c for c in "-_' ,.!?/[]{}():;"],
-            "\\n",
-            "\\t",
-            "\\\\",
-        ],
-        recurse=True,
-    )
+def _gen_json_string(lm, pattern=None):
+    if pattern is None:
+        string_chars = select(
+            [
+                char_range("a", "z"),
+                char_range("A", "Z"),
+                char_range("0", "9"),
+                *[c for c in "-_' ,.!?/[]{}():;"],
+                "\\n",
+                "\\t",
+                "\\\\",
+            ],
+            recurse=True,
+        )
+    else:
+        string_chars = regex(pattern)
     return lm + '"' + string_chars + '"'
 
 
@@ -185,7 +188,9 @@ def _gen_json(
         if target_type == "number":
             return lm + _gen_json_number()
         if target_type == "string":
-            return lm + _gen_json_string()
+            return lm + _gen_json_string(
+                pattern = json_schema.get("pattern")
+            )
         if target_type == "array":
             return lm + _gen_json_array(
                 item_schema=json_schema["items"],
