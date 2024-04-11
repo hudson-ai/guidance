@@ -1,8 +1,8 @@
 from typing import List, Union
 from collections.abc import Iterable
-from .._grammar import byte_range, ByteRange
+from .._grammar import select, byte_range, ByteRange, Select
 
-def char_range(low, high):
+def char_range(low: str, high: str) -> ByteRange:
     low_bytes = bytes(low, encoding="utf8")
     high_bytes = bytes(high, encoding="utf8")
     if len(low_bytes) > 1 or len(high_bytes) > 1:
@@ -10,10 +10,10 @@ def char_range(low, high):
     return byte_range(low_bytes, high_bytes)
 
 
-def nice_char_group(chars: Iterable[str]) -> List[Union[bytes, ByteRange]]:
+def nice_char_group(chars: Iterable[str]) -> Select:
     """
-    Condenses a list of characters to a list of "nice" guidance byte ranges,
-    e.g. ['A','B','C','D','1','2','3'] -> [b'AB', b'13']
+    Condenses a list of characters to a select over "nice" guidance byte ranges,
+    e.g. ['A','B','C','D','1','2','3'] -> select([b'AB', b'13'])
 
     Code adapted from interegular.fsm.nice_char_group
     """
@@ -37,4 +37,4 @@ def nice_char_group(chars: Iterable[str]) -> List[Union[bytes, ByteRange]]:
         out.append(byte_range(current_range[0], current_range[-1]))
     else:
         out.extend(current_range)
-    return out
+    return select(out)
