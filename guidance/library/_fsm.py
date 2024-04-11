@@ -99,5 +99,31 @@ class FSM:
         )
 
     @classmethod
-    def from_regex(cls, pattern: str) -> FSM:
+    def from_pattern(cls, pattern: str) -> FSM:
         return cls.from_interegular_fsm(interegular.parse_pattern(pattern).to_fsm())
+
+
+class Regex:
+    # TODO: should be a subclass of FSM?
+
+    def __init__(self, fsm: interegular.FSM):
+        self.fsm = fsm
+
+    @classmethod
+    def from_pattern(cls, pattern: str) -> Regex:
+        fsm = interegular.parse_pattern(pattern).to_fsm()
+        return cls(fsm)
+
+    def intersection(self, other: Regex) -> Regex:
+        # TODO: make FSM a thin wrapper around interegular.FSM and put this method there
+        fsm = self.fsm.intersection(other.fsm)
+        return Regex(fsm)
+
+    def __and__(self, other: Regex) -> Regex:
+        return self.intersection(other)
+
+    def to_fsm(self) -> FSM:
+        return FSM.from_interegular_fsm(self.fsm)
+
+    def to_grammar(self) -> GrammarFunction:
+        return self.to_fsm().to_grammar()
