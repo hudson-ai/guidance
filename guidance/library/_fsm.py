@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from collections.abc import Collection, Mapping
 from typing import Callable
 
+import interegular
+
 import guidance
-from guidance import optional, select
+from guidance import any_char_but, optional, select
 from guidance._grammar import GrammarFunction
+
+from ._char_range import nice_char_group
 
 # Aliases, purely to make later type annotations readable
 State = int
@@ -65,3 +71,29 @@ class FSM:
 
         func: Callable[[], GrammarFunction] = build_func(self.initial)
         return func()
+
+    @classmethod
+    def from_interegular_fsm(cls, fsm: interegular.FSM) -> FSM:
+        # TODO: consider making this the __init__, thinly wrapping interegular FSMs
+
+        # Remove redundant states first
+        fsm = fsm.reduce()
+        alphabet = {
+            char
+            for char in fsm.alphabet.keys()
+            if char != interegular.fsm.anything_else
+        }
+        grammars = {}
+        for transition_key, chars in fsm.alphabet.by_transition.items():
+            if interegular.fsm.anything_else in chars:
+                assert [interegular.fsm.anything_else] == chars
+                grammars[transition_key] = any_char_but(alphabet)
+            else:
+                grammars[transition_key] = nice_char_group(chars)
+
+        return cls(
+            transition_map=fsm.map,
+            initial=fsm.initial,
+            finals=fsm.finals,
+            grammars=grammars,
+        )
