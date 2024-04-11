@@ -97,3 +97,7 @@ class FSM:
             finals=fsm.finals,
             grammars=grammars,
         )
+
+    @classmethod
+    def from_regex(cls, pattern: str) -> FSM:
+        return cls.from_interegular_fsm(interegular.parse_pattern(pattern).to_fsm())
