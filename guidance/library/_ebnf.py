@@ -57,6 +57,8 @@ class EBNF:
                     else:
                         raise RuntimeError("Something went very wrong")
                     option += grammar
+                if rule.alias is not None:
+                    option.name = rule.alias
                 options.append(option)
             return lm + select(options)
 
