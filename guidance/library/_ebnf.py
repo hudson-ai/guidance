@@ -33,6 +33,7 @@ class EBNF:
             {}
         )
         # Once the grammars are actually "compiled", we can cache them to prevent duplication
+        # TODO: maybe add caching at a lower level of granularity -- still seeing duped nodes
         self.nonterminal_grammars: dict[str, GrammarFunction] = {}
 
     def _build(self, name: str) -> Callable[[], GrammarFunction]:
