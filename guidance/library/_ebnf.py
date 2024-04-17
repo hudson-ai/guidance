@@ -6,7 +6,7 @@ from lark.grammar import NonTerminal, Rule, Terminal
 
 import guidance
 from guidance import capture, regex, select
-from guidance._grammar import GrammarFunction
+from guidance._grammar import GrammarFunction, Join
 
 
 class EBNF:
@@ -45,7 +45,7 @@ class EBNF:
             options = []
             for rule in self.rules_by_nonterminal[name]:
                 # Form a `Join` over all terms in rule's expansion
-                option = ""
+                expansion = []
                 for term in rule.expansion:
                     if isinstance(term, Terminal):
                         grammar = self.terminal_grammars[term.name]
@@ -62,9 +62,8 @@ class EBNF:
                             self.nonterminal_grammars[term.name] = grammar
                     else:
                         raise RuntimeError("Something went very wrong")
-                    option += grammar
-                if rule.alias is not None:
-                    option.name = rule.alias
+                    expansion.append(grammar)
+                option = Join(expansion, name=rule.alias)
                 options.append(option)
             return lm + select(options)
 
