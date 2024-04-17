@@ -32,6 +32,8 @@ class EBNF:
         self.nonterminal_grammar_callables: dict[str, Callable[[], GrammarFunction]] = (
             {}
         )
+        # Once the grammars are actually "compiled", we can cache them to prevent duplication
+        self.nonterminal_grammars: dict[str, GrammarFunction] = {}
 
     def _build(self, name: str) -> Callable[[], GrammarFunction]:
         # No-arg function to be wrapped in guidance decorator.
@@ -48,12 +50,16 @@ class EBNF:
                     if isinstance(term, Terminal):
                         grammar = self.terminal_grammars[term.name]
                     elif isinstance(term, NonTerminal):
-                        grammar_callable = (
-                            self.nonterminal_grammar_callables.setdefault(
-                                term.name, self._build(term.name)
+                        try:
+                            grammar = self.nonterminal_grammars[term.name]
+                        except KeyError:
+                            grammar_callable = (
+                                self.nonterminal_grammar_callables.setdefault(
+                                    term.name, self._build(term.name)
+                                )
                             )
-                        )
-                        grammar = grammar_callable()
+                            grammar = grammar_callable()
+                            self.nonterminal_grammars[term.name] = grammar
                     else:
                         raise RuntimeError("Something went very wrong")
                     option += grammar
