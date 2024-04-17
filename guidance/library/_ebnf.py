@@ -26,9 +26,9 @@ class EBNF:
         for rule in self.parser.rules:
             self.rules_by_nonterminal[rule.origin.name].append(rule)
 
-        # Callables to produce grammars for nonterminals -- I *think* they need to be callables
-        # rather than literal grammars to avoid infinite recursion (taking advantage of late binding)
-        # TODO: test this hypothesis
+        # Callables to produce grammars for nonterminals
+        # They need to be callables rather than literal grammars to avoid
+        # infinite recursion (taking advantage of late binding)
         self.nonterminal_grammar_callables: dict[str, Callable[[], GrammarFunction]] = (
             {}
         )
