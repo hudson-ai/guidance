@@ -44,8 +44,8 @@ class EBNF:
             # Options to select over (one for each rule associated with a nonterminal)
             options = []
             for rule in self.rules_by_nonterminal[name]:
-                # Form a `Join` over all terms in rule's expansion
-                expansion = []
+                # Form a list of grammars to `Join`
+                terms = []
                 for term in rule.expansion:
                     if isinstance(term, Terminal):
                         grammar = self.terminal_grammars[term.name]
@@ -62,8 +62,12 @@ class EBNF:
                             self.nonterminal_grammars[term.name] = grammar
                     else:
                         raise RuntimeError("Something went very wrong")
-                    expansion.append(grammar)
-                option = Join(expansion, name=rule.alias)
+                    terms.append(grammar)
+                if len(terms) == 1 and rule.alias is None:
+                    # Unwrap unnamed singletons
+                    option = terms[0]
+                else:
+                    option = Join(terms, name=rule.alias)
                 options.append(option)
             return lm + select(options)
 
