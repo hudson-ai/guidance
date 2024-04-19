@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Callable
+from typing import Callable, Union
 
 from lark import Lark
 from lark.grammar import NonTerminal, Rule, Terminal
@@ -22,9 +22,9 @@ class EBNF:
 
         # Collect rules by nonterminal such that we can easily `select` over
         # the corresponding grammars
-        self.rules_by_nonterminal: dict[str, list[Rule]] = defaultdict(list)
+        self.rules_by_nonterminal: dict[NonTerminal, list[Rule]] = defaultdict(list)
         for rule in self.parser.rules:
-            self.rules_by_nonterminal[rule.origin.name].append(rule)
+            self.rules_by_nonterminal[rule.origin].append(rule)
 
         # Callables to produce grammars for nonterminals
         # They need to be callables rather than literal grammars to avoid
@@ -33,45 +33,50 @@ class EBNF:
             {}
         )
 
-    def _build(self, name: str) -> Callable[[], GrammarFunction]:
+    def build_term(self, term: Union[Terminal, NonTerminal]) -> GrammarFunction:
+        """
+        isinstance(term, Terminal) -> get grammar
+        """
+        if isinstance(term, Terminal):
+            return self.terminal_grammars[term.name]
+        if isinstance(term, NonTerminal):
+            grammar_callable = self.nonterminal_grammar_callables.setdefault(
+                term, self.build_nonterminal(term)
+            )
+            return grammar_callable()
+        raise TypeError(
+            f"term must be one of type Union[Terminal, NonTerminal], got {type(term)}"
+        )
+
+    def build_rule(self, rule: Rule) -> GrammarFunction:
+        terms = [self.build_term(term) for term in rule.expansion]
+        if len(terms) == 1 and rule.alias is None:
+            # Unwrap unnamed singletons
+            return terms[0]
+        else:
+            return Join(terms, name=rule.alias)
+
+    def build_nonterminal(
+        self, nonterminal: NonTerminal
+    ) -> Callable[[], GrammarFunction]:
         # No-arg function to be wrapped in guidance decorator.
         #   - Associated with exactly one nonterminal
         #   - Needs to be no-arg to allow for mutual recursion via `Placeholder`s
         #   - Wrap in guidance decorator later so that we can set the __name__ first
         def inner(lm):
             # Options to select over (one for each rule associated with a nonterminal)
-            options = []
-            for rule in self.rules_by_nonterminal[name]:
-                # Form a list of grammars to `Join`
-                terms = []
-                for term in rule.expansion:
-                    if isinstance(term, Terminal):
-                        grammar = self.terminal_grammars[term.name]
-                    elif isinstance(term, NonTerminal):
-                        grammar_callable = (
-                            self.nonterminal_grammar_callables.setdefault(
-                                term.name, self._build(term.name)
-                            )
-                        )
-                        grammar = grammar_callable()
-                    else:
-                        raise RuntimeError("Something went very wrong")
-                    terms.append(grammar)
-                if len(terms) == 1 and rule.alias is None:
-                    # Unwrap unnamed singletons
-                    option = terms[0]
-                else:
-                    option = Join(terms, name=rule.alias)
-                options.append(option)
+            options = [
+                self.build_rule(rule) for rule in self.rules_by_nonterminal[nonterminal]
+            ]
             return lm + select(options)
 
         # Set name and wrap
-        inner.__name__ = name
+        inner.__name__ = nonterminal.name
         return guidance(inner, stateless=True, dedent=False, cache=True)
 
     def build(self) -> Callable[[], GrammarFunction]:
         # Trigger recursive build of grammar using start nonterminal
-        return self._build(self.start)
+        return self.build_nonterminal(NonTerminal(self.start))
 
 
 @guidance(stateless=True)
