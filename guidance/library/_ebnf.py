@@ -4,9 +4,9 @@ from typing import Callable
 from lark import Lark
 from lark.grammar import NonTerminal, Rule, Terminal
 
-import guidance
-from guidance import capture, regex, select
-from guidance._grammar import GrammarFunction, Join
+from .._grammar import GrammarFunction, Join
+from .._guidance import guidance
+from . import capture, regex, select
 
 
 class EBNF:
