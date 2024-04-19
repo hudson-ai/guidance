@@ -32,9 +32,6 @@ class EBNF:
         self.nonterminal_grammar_callables: dict[str, Callable[[], GrammarFunction]] = (
             {}
         )
-        # Once the grammars are actually "compiled", we can cache them to prevent duplication
-        # TODO: maybe add caching at a lower level of granularity -- still seeing duped nodes
-        self.nonterminal_grammars: dict[str, GrammarFunction] = {}
 
     def _build(self, name: str) -> Callable[[], GrammarFunction]:
         # No-arg function to be wrapped in guidance decorator.
@@ -51,16 +48,12 @@ class EBNF:
                     if isinstance(term, Terminal):
                         grammar = self.terminal_grammars[term.name]
                     elif isinstance(term, NonTerminal):
-                        try:
-                            grammar = self.nonterminal_grammars[term.name]
-                        except KeyError:
-                            grammar_callable = (
-                                self.nonterminal_grammar_callables.setdefault(
-                                    term.name, self._build(term.name)
-                                )
+                        grammar_callable = (
+                            self.nonterminal_grammar_callables.setdefault(
+                                term.name, self._build(term.name)
                             )
-                            grammar = grammar_callable()
-                            self.nonterminal_grammars[term.name] = grammar
+                        )
+                        grammar = grammar_callable()
                     else:
                         raise RuntimeError("Something went very wrong")
                     terms.append(grammar)
@@ -74,7 +67,7 @@ class EBNF:
 
         # Set name and wrap
         inner.__name__ = name
-        return guidance(inner, stateless=True, dedent=False)
+        return guidance(inner, stateless=True, dedent=False, cache=True)
 
     def build(self) -> Callable[[], GrammarFunction]:
         # Trigger recursive build of grammar using start nonterminal
