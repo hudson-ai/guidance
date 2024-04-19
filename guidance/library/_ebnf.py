@@ -84,36 +84,3 @@ def ebnf(lm, name=None, *, grammar: str, start: str):
     grammar_callable = EBNF(grammar, start).build()
     g = grammar_callable()
     return lm + capture(g, name=name)
-
-
-def example():
-    """
-    Currently, `ebnf` relies on `regex`, which supports only a very limited regex syntax.
-    Therefore we have to use a really simplified set of terminals here
-    (e.g. DIGIT as opposed to NUMBER)
-    """
-    start = "sum"
-    grammar_def = """
-    sum     : product
-            | sum "+" product   -> add
-            | sum "-" product   -> subtract
-    product : item
-            | product "*" item  -> multiply
-            | product "/" item  -> divide
-    item    : DIGIT             -> number
-            | "(" sum ")"       -> sum
-    %import common.DIGIT
-    """
-    grammar = ebnf(grammar=grammar_def, start=start)
-
-    assert grammar.match("1+2+3+4") is not None
-    assert grammar.match("1/2+3/4") is not None
-    assert grammar.match("(1+2/3)*(4+(5+3/2))") is not None
-    assert grammar.match("2+3+4(5)") is None
-    assert grammar.match("7(+8)") is None
-
-    return grammar
-
-
-if __name__ == "__main__":
-    example()
