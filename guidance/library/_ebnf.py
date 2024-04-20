@@ -29,9 +29,9 @@ class EBNF:
         # Callables to produce grammars for nonterminals
         # They need to be callables rather than literal grammars to avoid
         # infinite recursion (taking advantage of late binding)
-        self.nonterminal_grammar_callables: dict[Terminal, Callable[[], GrammarFunction]] = (
-            {}
-        )
+        self.nonterminal_grammar_callables: dict[
+            Terminal, Callable[[], GrammarFunction]
+        ] = {}
 
     def build_term(self, term: Union[Terminal, NonTerminal]) -> GrammarFunction:
         if isinstance(term, Terminal):
