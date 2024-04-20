@@ -34,9 +34,6 @@ class EBNF:
         )
 
     def build_term(self, term: Union[Terminal, NonTerminal]) -> GrammarFunction:
-        """
-        isinstance(term, Terminal) -> get grammar
-        """
         if isinstance(term, Terminal):
             return self.terminal_grammars[term.name]
         if isinstance(term, NonTerminal):
