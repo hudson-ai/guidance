@@ -15,8 +15,8 @@ class EBNF:
         self.parser = Lark(grammar, start=start)  # kwds?
 
         # grammars for nonterminals -- regex seems to be the simplest solution
-        self.terminal_grammars: dict[str, GrammarFunction] = {
-            terminal.name: regex(pattern=terminal.pattern.to_regexp())
+        self.terminal_grammars: dict[Terminal, GrammarFunction] = {
+            Terminal(terminal.name): regex(pattern=terminal.pattern.to_regexp())
             for terminal in self.parser.terminals
         }
 
@@ -29,13 +29,13 @@ class EBNF:
         # Callables to produce grammars for nonterminals
         # They need to be callables rather than literal grammars to avoid
         # infinite recursion (taking advantage of late binding)
-        self.nonterminal_grammar_callables: dict[str, Callable[[], GrammarFunction]] = (
+        self.nonterminal_grammar_callables: dict[Terminal, Callable[[], GrammarFunction]] = (
             {}
         )
 
     def build_term(self, term: Union[Terminal, NonTerminal]) -> GrammarFunction:
         if isinstance(term, Terminal):
-            return self.terminal_grammars[term.name]
+            return self.terminal_grammars[term]
         if isinstance(term, NonTerminal):
             grammar_callable = self.nonterminal_grammar_callables.setdefault(
                 term, self.build_nonterminal(term)
