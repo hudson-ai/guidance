@@ -25,6 +25,8 @@ class TestIntegerArithmetic:
     grammar = ebnf(grammar=grammar_def, start=start)
 
     def test_repr(self):
+        # This test is just a reminder to reduce redundancies
+        # in the graph and improve caching
         print(repr(self.grammar))
         assert len(repr(self.grammar).split("\n")) < 18
 
