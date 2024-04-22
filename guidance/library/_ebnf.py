@@ -71,13 +71,11 @@ class EBNF:
         inner.__name__ = nonterminal.name
         return guidance(inner, stateless=True, dedent=False, cache=True)
 
-    def build(self) -> Callable[[], GrammarFunction]:
+    def build(self) -> GrammarFunction:
         # Trigger recursive build of grammar using start nonterminal
-        return self.build_nonterminal(NonTerminal(self.start))
+        return self.build_term(NonTerminal(self.start))
 
 
 @guidance(stateless=True)
 def ebnf(lm, name=None, *, grammar: str, start: str):
-    grammar_callable = EBNF(grammar, start).build()
-    g = grammar_callable()
-    return lm + capture(g, name=name)
+    return lm + capture(EBNF(grammar, start).build(), name=name)
