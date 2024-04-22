@@ -1,6 +1,9 @@
+from typing import Any
+
 import pytest
 
 from guidance import ebnf
+from guidance._grammar import Join, Select
 
 
 class TestIntegerArithmetic:
@@ -24,11 +27,22 @@ class TestIntegerArithmetic:
     """
     grammar = ebnf(grammar=grammar_def, start=start)
 
-    def test_repr(self):
-        # This test is just a reminder to reduce redundancies
-        # in the graph and improve caching
-        print(repr(self.grammar))
-        assert len(repr(self.grammar).split("\n")) < 18
+    def test_no_redundant_nonterminals(self):
+        # Accumulate a set of all nonterminal nodes in the grammar
+        seen = set()
+
+        def accumulate(g: Any):
+            if g in seen or not isinstance(g, (Join, Select)):
+                return
+            seen.add(g)
+            for v in g.values:
+                accumulate(v)
+
+        accumulate(self.grammar)
+
+        # Magic number 14 is minimal number of nodes (derived "by inspection")
+        assert len(seen) == 14
+        assert len({s.name for s in seen}) == 14
 
     @pytest.mark.parametrize(
         "matchstr", ["1+2+3+4", "1/2+3/4", "(1+2/3)*(4+(5+3/2))", "8/-4", "-9", "42"]
