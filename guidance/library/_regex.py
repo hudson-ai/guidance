@@ -4,7 +4,7 @@ grammar = """
 ?start      : expression
 
 ?expression : term 
-            | term ("|" term)+      -> or_expr
+            | expression ("|" term)+      -> or_expr
 
 ?term       : factor
             | term factor+          -> concat_expr
