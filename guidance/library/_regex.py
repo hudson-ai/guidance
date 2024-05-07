@@ -1,28 +1,28 @@
 from lark import Lark, Transformer
 
 grammar = """
-?start: expression
+?start      : expression
 
-?expression: term 
-    | term ("|" term)+ -> or_expr
+?expression : term 
+            | term ("|" term)+      -> or_expr
 
-?term: factor
-    | term factor+ -> concat_expr
+?term       : factor
+            | term factor+          -> concat_expr
 
-?factor: atom quantifier? -> quantified_expr
+?factor     : atom quantifier?      -> quantified_expr
 
-?atom: char
-      | "."           -> any_char
-      | "[" CHAR_SET "]" -> char_set
-      | "(" expression ")"
-      | ESCAPED_CHAR  -> escaped_char
+?atom       : char
+            | "."                   -> any_char
+            | "[" CHAR_SET "]"      -> char_set
+            | "(" expression ")"
+            | ESCAPED_CHAR          -> escaped_char
 
-?quantifier: "*"        -> zero_or_more
-            | "+"       -> one_or_more
-            | "?"       -> zero_or_one
-            | "{" INT "}"        -> exact
-            | "{" INT "," "}"    -> at_least
-            | "{" INT "," INT "}"-> range_quant
+?quantifier : "*"                   -> zero_or_more
+            | "+"                   -> one_or_more
+            | "?"                   -> zero_or_one
+            | "{" INT "}"           -> exact
+            | "{" INT "," "}"       -> at_least
+            | "{" INT "," INT "}"   -> range_quant
 
 CHAR_SET: /[^\[\]]+/
 ESCAPED_CHAR: /\\[tnrfaebBdDsSwW0-9]/
