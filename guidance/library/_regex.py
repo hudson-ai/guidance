@@ -1,9 +1,20 @@
+from typing import NamedTuple, Optional
+
 from lark import Lark, Transformer
+
+from .._grammar import Join, select, string
+from .._guidance import guidance
+from ._any_char import any_char
+from ._any_char_but import any_char_but
+from ._char_range import char_range
+from ._char_set import char_set
+from ._optional import optional
+from ._zero_or_more import zero_or_more
 
 grammar = """
 ?start      : expression
 
-?expression : term 
+?expression : term
             | expression ("|" term)+      -> or_expr
 
 ?term       : factor
@@ -11,11 +22,11 @@ grammar = """
 
 ?factor     : atom quantifier?      -> quantified_expr
 
-?atom       : char
+?atom       : char | special_char
             | "."                   -> any_char
             | "[" CHAR_SET "]"      -> char_set
+            | "[^" CHAR_SET "]"     -> any_char_but
             | "(" expression ")"
-            | ESCAPED_CHAR          -> escaped_char
 
 ?quantifier : "*"                   -> zero_or_more
             | "+"                   -> one_or_more
@@ -24,118 +35,93 @@ grammar = """
             | "{" INT "," "}"       -> at_least
             | "{" INT "," INT "}"   -> range_quant
 
+?special_char: "\\d"                 -> digit
+            
 CHAR_SET: /[^\[\]]+/
-ESCAPED_CHAR: /\\[tnrfaebBdDsSwW0-9]/
 char: /[^|()[\\]{}.*+?\\-]/
 INT: /\d+/
 """
 
+
 # Define a Transformer to convert parse tree to AST
 class RegexTransformer(Transformer):
     def or_expr(self, args):
-        return OrExpression(args)
+        return select(args)
 
     def concat_expr(self, args):
-        return ConcatExpression(args)
+        return Join(args)
 
     def quantified_expr(self, args):
         expr, *quant = args
         if quant:
-            return QuantifiedExpression(expr, quant[0])
+            [quant] = quant
+            return quantified_expr(expr, quant)
         return expr
 
     def any_char(self, _):
-        return AnyChar()
+        return any_char()
+
+    def any_char_but(self, args):
+        return any_char_but(args)
 
     def char_set(self, args):
-        return CharSet(''.join(args))
+        [s] = args
+        return char_set(s)
 
     def char(self, args):
-        return Character(args[0].value)
+        [s] = args
+        return string(s)
+
+    def digit(self, _):
+        return char_range("0", "9")
 
     def zero_or_more(self, _):
-        return Quantifier(0, None)  # Equivalent to '*'
+        return Quantifier(0, None)
 
     def one_or_more(self, _):
-        return Quantifier(1, None)  # Equivalent to '+'
+        return Quantifier(1, None)
 
     def zero_or_one(self, _):
-        return Quantifier(0, 1)  # Equivalent to '?'
+        return Quantifier(0, 1)
 
     def exact(self, args):
-        count = int(args[0])
-        return Quantifier(count, count)  # Equivalent to '{n}'
+        [count] = args
+        return Quantifier(int(count), int(count))
 
     def at_least(self, args):
-        return Quantifier(int(args[0]), None)  # Equivalent to '{n,}'
+        [count] = args
+        return Quantifier(int(count), None)
 
     def range_quant(self, args):
-        return Quantifier(int(args[0]), int(args[1]))  # Equivalent to '{n,m}'
+        min, max = args
+        return Quantifier(int(min), int(max))
 
 
-# Define generic AST nodes
-class OrExpression:
-    def __init__(self, expressions):
-        self.expressions = expressions
+class Quantifier(NamedTuple):
+    min: int
+    max: Optional[int]
 
-    def __repr__(self):
-        return f"OrExpression({self.expressions})"
 
-class ConcatExpression:
-    def __init__(self, expressions):
-        self.expressions = expressions
-
-    def __repr__(self):
-        return f"ConcatExpression({self.expressions})"
-
-class QuantifiedExpression:
-    def __init__(self, expression, quantifier):
-        self.expression = expression
-        self.quantifier = quantifier
-
-    def __repr__(self):
-        return f"QuantifiedExpression(expression={self.expression}, quantifier={self.quantifier})"
-
-class AnyChar:
-    def __repr__(self):
-        return "AnyChar()"
-
-class CharSet:
-    def __init__(self, chars):
-        self.chars = chars
-
-    def __repr__(self):
-        return f"CharSet(chars='{self.chars}')"
-
-class Character:
-    def __init__(self, char):
-        self.char = char
-
-    def __repr__(self):
-        return f"Character(char='{self.char}')"
-
-class EscapedChar:
-    def __init__(self, char):
-        self.char = char
-
-    def __repr__(self):
-        return f"EscapedChar(char='{self.char}')"
-
-class Quantifier:
-    def __init__(self, min, max):
-        self.min = min
-        self.max = max
-
-    def __repr__(self):
-        min_str = str(self.min) if self.min is not None else 'None'
-        max_str = str(self.max) if self.max is not None else 'None'
-        return f"Quantifier(min={min_str}, max={max_str})"
+@guidance(stateless=True)
+def quantified_expr(lm, expr, quantifier: Quantifier):
+    min, max = quantifier
+    for _ in range(min):
+        lm += expr
+    if max is None:
+        return lm + zero_or_more(expr)
+    for _ in range(max - min):
+        lm += optional(expr)
+    return lm
 
 
 # Create the parser
-parser = Lark(grammar, parser='lalr', transformer=RegexTransformer())
+_parser = Lark(grammar, parser="lalr", transformer=RegexTransformer())
 
-# Example usage
-regex = "abcd" #"[abc]*|(d|e+f?)"
-ast = parser.parse(regex)
-print(ast)
+
+@guidance(stateless=True)
+def regex(lm, pattern):
+    try:
+        return lm + _parser.parse(pattern)
+    except:
+        print(pattern)
+        raise
