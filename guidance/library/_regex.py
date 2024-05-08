@@ -36,9 +36,12 @@ grammar = """
             | "{" INT "," INT "}"   -> range_quant
 
 ?special_char: "\\d"                 -> digit
-            
+
+char: normal_char | "\\\\" meta_char
+?meta_char: /[.+*?()[\\]{}|^$]/
+?normal_char: /[^.+\*?()[\\]{}|^$]/
+
 CHAR_SET: /[^\[\]]+/
-char: /[^|()[\\]{}.*+?\\-]/
 INT: /\d+/
 """
 
