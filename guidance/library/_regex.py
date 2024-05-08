@@ -123,8 +123,4 @@ _parser = Lark(grammar, parser="lalr", transformer=RegexTransformer())
 
 @guidance(stateless=True)
 def regex(lm, pattern):
-    try:
-        return lm + _parser.parse(pattern)
-    except:
-        print(pattern)
-        raise
+    return lm + _parser.parse(pattern)
