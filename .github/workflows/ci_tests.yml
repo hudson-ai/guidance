@@ -18,11 +18,17 @@ jobs:
 
     runs-on: gpu-runner
     strategy:
+      fail-fast: false # Don't cancel all on first failure
       matrix:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust
+        shell: bash
+        run: |
+           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain 1.75.0
+           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
@@ -37,7 +43,7 @@ jobs:
       - name: Ensure NVIDIA SDK available
         run: |
           sudo apt-get -y install cuda-toolkit
-          echo "/usr/local/cuda-12.4/bin" >> $GITHUB_PATH
+          echo "/usr/local/cuda-12.5/bin" >> $GITHUB_PATH
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -47,22 +53,33 @@ jobs:
       - name: GPU pip installs
         run: |
           pip install accelerate
-          CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install "llama-cpp-python<0.2.58"
+          CMAKE_ARGS="-DLLAMA_CUBLAS=on" pip install "llama-cpp-python!=0.2.58,!=0.2.75"
       - name: Check GPU available
         run: |
           python -c "import torch; assert torch.cuda.is_available()"
       - name: Test with pytest
         env:
-          # Configure endpoints
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Configure endpoints for Azure OpenAI
           AZUREAI_CHAT_ENDPOINT: ${{ secrets.AZUREAI_CHAT_ENDPOINT }}
           AZUREAI_CHAT_KEY: ${{ secrets.AZUREAI_CHAT_KEY }}
           AZUREAI_CHAT_MODEL: ${{ secrets.AZUREAI_CHAT_MODEL }}
           AZUREAI_COMPLETION_ENDPOINT: ${{ secrets.AZUREAI_COMPLETION_ENDPOINT }}
           AZUREAI_COMPLETION_KEY: ${{ secrets.AZUREAI_COMPLETION_KEY }}
           AZUREAI_COMPLETION_MODEL: ${{ secrets.AZUREAI_COMPLETION_MODEL }}
+          # Configure endpoints for Azure AI Studio
+          AZURE_AI_STUDIO_PHI3_ENDPOINT: ${{ vars.AZURE_AI_STUDIO_PHI3_ENDPOINT }}
+          AZURE_AI_STUDIO_PHI3_DEPLOYMENT: ${{ vars.AZURE_AI_STUDIO_PHI3_DEPLOYMENT }}
+          AZURE_AI_STUDIO_PHI3_KEY: ${{ secrets.AZURE_AI_STUDIO_PHI3_KEY }}
+          AZURE_AI_STUDIO_MISTRAL_CHAT_ENDPOINT: ${{ vars.AZURE_AI_STUDIO_MISTRAL_CHAT_ENDPOINT }}
+          AZURE_AI_STUDIO_MISTRAL_CHAT_DEPLOYMENT: ${{ vars.AZURE_AI_STUDIO_MISTRAL_CHAT_DEPLOYMENT }}
+          AZURE_AI_STUDIO_MISTRAL_CHAT_KEY: ${{ secrets.AZURE_AI_STUDIO_MISTRAL_CHAT_KEY }}
+          AZURE_AI_STUDIO_LLAMA3_CHAT_ENDPOINT: ${{ vars.AZURE_AI_STUDIO_LLAMA3_CHAT_ENDPOINT }}
+          AZURE_AI_STUDIO_LLAMA3_CHAT_DEPLOYMENT: ${{ vars.AZURE_AI_STUDIO_LLAMA3_CHAT_DEPLOYMENT }}
+          AZURE_AI_STUDIO_LLAMA3_CHAT_KEY: ${{ secrets.AZURE_AI_STUDIO_LLAMA3_CHAT_KEY }}
         run: |
           pytest --cov=guidance --cov-report=xml --cov-report=term-missing \
-            -m needs_credentials \
+            -m "needs_credentials and (not notebooks)" \
             ./tests/
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v4

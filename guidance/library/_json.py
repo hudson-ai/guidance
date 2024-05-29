@@ -21,7 +21,7 @@ except ImportError:
 from .._guidance import guidance
 from ..library import char_range, one_or_more, optional, zero_or_more
 
-from .._grammar import GrammarFunction, select, capture
+from .._grammar import GrammarFunction, select, capture, with_temperature
 from ._pydantic import pydantic_to_json_schema
 
 
@@ -32,6 +32,9 @@ def _to_compact_json(target: Any) -> str:
     # output, we don't need to worry about pretty printing
     # and whitespace
     return json_dumps(target, separators=(",", ":"))
+
+
+_DEFS_KEYS = ["$defs", "definitions"]
 
 
 @guidance(stateless=True)
@@ -244,6 +247,13 @@ def _gen_json(
             anyof_list=json_schema[ANYOF_STRING], definitions=definitions
         )
 
+    ALLOF_STRING = "allOf"
+    if ALLOF_STRING in json_schema:
+        allof_list = json_schema[ALLOF_STRING]
+        if len(allof_list) != 1:
+            raise ValueError("Only support allOf with exactly one item")
+        return lm + _gen_json(allof_list[0], definitions)
+
     REF_STRING = "$ref"
     if REF_STRING in json_schema:
         return lm + _get_definition(
@@ -296,44 +306,48 @@ def json(
         Type["pydantic.BaseModel"],
         "pydantic.TypeAdapter",
     ],
+    temperature: float = 0.0,
 ):
     """Generate valid JSON according to the supplied JSON schema or `pydantic` model.
 
-    Not all parts of JSON schema (https://json-schema.org/) are supported. Indeed some parts
+    Not all parts of `JSON schema <https://json-schema.org/>`_ are supported. Indeed some parts
     (such as bounds on numbers) cannot really be supported in the context of LLM generation.
 
     Using a JSON schema:
-    >>> schema = ''{ "type": "object", "properties": { "a" : {"type": "integer"} } }'
-    >>> schema_obj = json.loads(schema)
-    >>> lm += json(name="generated_object", schema=schema_obj)
-    >>> print(json.loads(lm["generated_object"]))
-    { 'a' : 2 }
 
-    Using a `pydantic.BaseModel`:
-    >>> class Schema(BaseModel):
-    ...     b: bool
-    >>> lm += json(name="generated_object", schema=Schema)
-    >>> print(json.loads(lm["generated_object"]))
-    { 'b' : False }
+        >>> schema = ''{ "type": "object", "properties": { "a" : {"type": "integer"} } }'
+        >>> schema_obj = json.loads(schema)
+        >>> lm += json(name="generated_object", schema=schema_obj)
+        >>> print(json.loads(lm["generated_object"]))
+        { 'a' : 2 }
 
-    Using a `pydantic.TypeAdapter`:
-    >>> schema = TypeAdapter(list[int])
-    >>> lm += json(name="generated_object", schema=schema)
-    >>> print(json.loads(lm["generated_object"]))
-    [1, 2, 3]
+    Using a ``pydantic.BaseModel``:
+
+        >>> class Schema(BaseModel):
+        ...     b: bool
+        >>> lm += json(name="generated_object", schema=Schema)
+        >>> print(json.loads(lm["generated_object"]))
+        { 'b' : False }
+
+    Using a ``pydantic.TypeAdapter``:
+
+        >>> schema = TypeAdapter(list[int])
+        >>> lm += json(name="generated_object", schema=schema)
+        >>> print(json.loads(lm["generated_object"]))
+        [1, 2, 3]
 
     Parameters
     ----------
 
     name : str or None
         If this is not None then the the results of the generation will be saved as a variable on
-        the Model object (so you can access the result as `lm["var_name"]`).
+        the Model object (so you can access the result as ``lm["var_name"]``).
 
     schema : Union[Mapping[str, Any], Type[pydantic.BaseModel], pydantic.TypeAdapter]
         One of:
-            - A JSON schema object. This is a JSON schema string which has been passed to `json.loads()`.
-            - A subclass of `pydantic.BaseModel`
-            - An instance of `pydantic.TypeAdapter`
+            - A JSON schema object. This is a JSON schema string which has been passed to ``json.loads()``
+            - A subclass of ``pydantic.BaseModel``
+            - An instance of ``pydantic.TypeAdapter``
     """
     if isinstance(schema, Mapping):
         # Raises jsonschema.exceptions.SchemaError or ValueError
@@ -342,12 +356,16 @@ def json(
     else:
         schema = pydantic_to_json_schema(schema)
 
-    _DEFS_KEY = "$defs"
     definitions: Mapping[str, Callable[[], GrammarFunction]] = {}
-    if _DEFS_KEY in schema:
-        definitions = _build_definitions(schema[_DEFS_KEY])
+    for dk in _DEFS_KEYS:
+        if dk in schema:
+            assert len(definitions) == 0, "Found duplicate definitions"
+            definitions = _build_definitions(schema[dk])
 
-    return lm + capture(_gen_json(schema, definitions), name=name)
+    return lm + capture(
+        with_temperature(_gen_json(schema, definitions), temperature=temperature),
+        name=name,
+    )
 
 
 def _build_definitions(
@@ -378,11 +396,12 @@ def _get_definition(
     definitions: Mapping[str, Callable[[], GrammarFunction]],
 ):
     assert definitions is not None
-    REF_START = "#/$defs/"
-    assert reference.startswith(
-        REF_START
-    ), f"Reference {reference} must start with {REF_START}"
+    target_definition = None
+    for dk in _DEFS_KEYS:
+        ref_start = f"#/{dk}/"
+        if reference.startswith(ref_start):
+            target_name = reference[len(ref_start) :]
+            target_definition = definitions[target_name]
 
-    target_name = reference[len(REF_START) :]
-    definition = definitions[target_name]
-    return lm + definition()
+    assert target_definition is not None
+    return lm + target_definition()
