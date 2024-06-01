@@ -1,5 +1,5 @@
 from guidance import char_set, one_or_more, select, string, zero_or_more
-from guidance._grammar import Byte, ByteRange
+from guidance._grammar import Byte, ByteRange, Join, Select
 from guidance._parser import EarleyCommitParser
 
 
@@ -131,3 +131,17 @@ def test_string_utf8():
     parser.consume_byte(b[:1])
     assert parser.valid_next_bytes() == set([Byte(b[1:])])
     parser.consume_byte(b[1:])
+
+
+def test_nullables():
+    """
+    Tests for nullable bug in naive Earley parsers described in Figure 2
+    of Aycock and Horspool's "Practical Earley Parsing" paper.
+    """
+    E = Join([''], name="E")
+    A = Select(["a", E], name="A")
+    S = Join([A]*4, name="S")
+    Sp = Join([S], name="S'")
+
+    parser = EarleyCommitParser(Sp)
+    parser.consume_byte(b"a")
