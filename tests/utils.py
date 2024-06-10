@@ -174,6 +174,7 @@ def generate_and_check(
     # First, validate that the grammar actually accepts the test string
     grammar = grammar_callable(name=capture_key)
     match = grammar.match(test_string)
+    assert match is not None
     assert match.captures[capture_key].decode() == test_string
 
     # The next part is to prevent intermittent test failures

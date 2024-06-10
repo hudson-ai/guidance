@@ -1,5 +1,8 @@
 import pytest
 from functools import partial
+import unicodedata
+from collections import defaultdict
+import re
 
 from guidance import regex
 from guidance._grammar import Byte, ByteRange
@@ -515,3 +518,53 @@ class TestSpecialCharacters:
             allowed_bytes=allowed_bytes,
             grammar=regex(pattern),
         )
+
+class TestUnicode:
+
+    # unicode code points are 0x0000 to 0x10FFFF
+    all_chars = {chr(codepoint) for codepoint in range(0x110000)}
+    all_chars_string = "".join(all_chars)
+    char_by_category = defaultdict(set)
+    for char in all_chars:
+        category = unicodedata.category(char)
+        char_by_category[category].add(char)
+
+    def test_category_digit(self):
+        string = "".join(self.char_by_category["Nd"])
+
+        # First, check that what we are setting up is correct
+        assert set(re.findall(r"\d", self.all_chars_string)) == set(string)
+        assert set(re.findall(r"\D", self.all_chars_string)) == self.all_chars - set(string)
+
+        # # grammar_callable = partial(regex, pattern=r"\d+")
+        # grammar_callable = partial(regex, pattern=f"[{string}]+")
+        # generate_and_check(grammar_callable, string)
+
+    def test_category_word(self):
+        string = "".join(
+            self.char_by_category["Lu"]
+            | self.char_by_category["Ll"]
+            | self.char_by_category["Lt"]
+            | self.char_by_category["Lm"]
+            | self.char_by_category["Lo"]
+            | self.char_by_category["Nd"]
+            | self.char_by_category["No"]
+            | self.char_by_category["Nl"]
+            | set("_")
+        )
+
+        # First, check that what we are setting up is correct
+        assert set(re.findall(r"\w", self.all_chars_string)) == set(string)
+        assert set(re.findall(r"\W", self.all_chars_string)) == self.all_chars - set(string)
+
+    def test_category_space(self):
+        string = "".join(
+            self.char_by_category["Zs"]
+            | self.char_by_category["Zl"]
+            | self.char_by_category["Zp"]
+            | set("\t\n\r\f\v\x1f\x1d\x85\x1c\x1e") # subset of "Cc"
+        )
+
+        # First, check that what we are setting up is correct
+        assert set(re.findall(r"\s", self.all_chars_string)) == set(string)
+        assert set(re.findall(r"\S", self.all_chars_string)) == self.all_chars - set(string)
