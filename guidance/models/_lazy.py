@@ -1,8 +1,5 @@
-
-
 class LazyModel:
-
-    def __init__(self, model, work='', parent=None):
+    def __init__(self, model, work="", parent=None):
         self.model = model
         self.work = work
         self.parent = parent
