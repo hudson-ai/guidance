@@ -11,6 +11,9 @@ class LazyModel:
     def __str__(self):
         return str(self.unwrap())
 
+    def __getitem__(self, key):
+        return self.unwrap()[key]
+
     def __add__(self, string):
         if string:
             lm = LazyModel(self.model, string, parent=self)
