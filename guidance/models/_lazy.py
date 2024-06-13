@@ -1,3 +1,6 @@
+from weakref import WeakSet
+
+
 class LazyModel:
     """
     Wrapper around a model that allows for lazy evaluation of grammars
@@ -12,7 +15,7 @@ class LazyModel:
         self.model = model
         self.work = work
         self.parent = parent
-        self.children = set()
+        self.children = WeakSet()
 
     def __str__(self):
         """
