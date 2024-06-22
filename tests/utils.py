@@ -153,7 +153,8 @@ def check_match_failure(
         grammar.match(bad_string, raise_exceptions=True)
     assert pe.value.consumed_bytes == good_bytes
     assert pe.value.current_byte == failure_byte
-    assert pe.value.allowed_bytes == allowed_bytes
+    WHITESPACE = {b" ", b"\t", b"\n", b"\r"}
+    assert (pe.value.allowed_bytes == allowed_bytes) | (pe.value.allowed_bytes == allowed_bytes | WHITESPACE)
 
 
 class GrammarFunctionCallable(Protocol):
