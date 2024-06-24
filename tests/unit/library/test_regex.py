@@ -2,32 +2,34 @@ import pytest
 from functools import partial
 
 from guidance import regex
-from guidance._grammar import Byte, ByteRange
 
 from ...utils import check_match_failure, generate_and_check
 
+def byte_range(byterange: bytes):
+    start, end = byterange
+    return {bytes([i]) for i in range(start, end + 1)}
 
 class TestCharacterClasses:
     @pytest.mark.parametrize(
-        "pattern, string, stop_char",
+        "pattern, string",
         [
-            (r"[abc]+", "cbabbaccabc", chr(7)),
-            (r"[a-z]+", "thequickbrownfoxjumpsoverthelazydog", chr(7)),
-            (r"[0-9]+", "9876543210", chr(7)),
-            (r"[b-y]+", "by", chr(7)),  # range is left and right inclusive
-            (r"[a-f0-9]+", "abcdef0123456789", chr(7)),
-            (r"[abcA-Z]+", "abcABCXYZ", chr(7)),
-            (r"[a-z\d]+", "abc123", chr(7)),
-            (r"[^abc]+", "ABCxyz8743-!@#$%^&*()_+", "a"),
-            (r"[^\d]+", "abcXYZ-!@#$%^&*()_+", "8"),
-            (r"[^B-Z]+", "qwertyA", "B"),
-            (r"[^a-z\d]+", "ABCDEF-!@#$%^&*()_+", "a"),
-            (r"[^\n]+", "ABCxyz8743-!@#$%^&*()_+", "\n"),
+            (r"[abc]+", "cbabbaccabc"),
+            (r"[a-z]+", "thequickbrownfoxjumpsoverthelazydog"),
+            (r"[0-9]+", "9876543210"),
+            (r"[b-y]+", "by"),  # range is left and right inclusive
+            (r"[a-f0-9]+", "abcdef0123456789"),
+            (r"[abcA-Z]+", "abcABCXYZ"),
+            (r"[a-z\d]+", "abc123"),
+            (r"[^abc]+", "ABCxyz8743-!@#$%^&*()_+"),
+            (r"[^\d]+", "abcXYZ-!@#$%^&*()_+"),
+            (r"[^B-Z]+", "qwertyA"),
+            (r"[^a-z\d]+", "ABCDEF-!@#$%^&*()_+"),
+            (r"[^\n]+", "ABCxyz8743-!@#$%^&*()_+"),
         ],
     )
-    def test_good(self, pattern, string, stop_char):
+    def test_good(self, pattern, string):
         grammar_callable = partial(regex, pattern=pattern)
-        generate_and_check(grammar_callable, string, stop_char=stop_char)
+        generate_and_check(grammar_callable, string)
 
     @pytest.mark.parametrize(
         "pattern, string, good_bytes, failure_byte, allowed_bytes",
@@ -37,91 +39,91 @@ class TestCharacterClasses:
                 "cbabbaccabcx",
                 b"cbabbaccabc",
                 b"x",
-                {Byte(b"a"), Byte(b"b"), Byte(b"c")},
+                {b"a", b"b", b"c"},
             ),
             (
                 r"[a-z]+",
                 "thequickbrownfoxjumpsoverthelazydogX",
                 b"thequickbrownfoxjumpsoverthelazydog",
                 b"X",
-                {ByteRange((b"az"))},
+                byte_range(b"az"),
             ),
             (
                 r"[0-9]+",
                 "9876543210x",
                 b"9876543210",
                 b"x",
-                {ByteRange((b"09"))},
+                byte_range(b"09"),
             ),
             (
                 r"[b-y]+",
                 "bya",
                 b"by",
                 b"a",
-                {ByteRange(b"by")},
+                byte_range(b"by"),
             ),  # range doesn't overflow left
             (
                 r"[b-y]+",
                 "byz",
                 b"by",
                 b"z",
-                {ByteRange(b"by")},
+                byte_range(b"by"),
             ),  # range doesn't overflow right
             (
                 r"[a-f0-9]+",
                 "abcdef0123456789x",
                 b"abcdef0123456789",
                 b"x",
-                {ByteRange(b"af"), ByteRange(b"09")},
+                {*byte_range(b"af"), *byte_range(b"09")},
             ),
             (
                 r"[abcA-Z]+",
                 "abcABCXYZx",
                 b"abcABCXYZ",
                 b"x",
-                {Byte(b"a"), Byte(b"b"), Byte(b"c"), ByteRange(b"AZ")},
+                {b"a", b"b", b"c", *byte_range(b"AZ")},
             ),
             (
                 r"[a-z\d]+",
                 "abc123@",
                 b"abc123",
                 b"@",
-                {ByteRange(b"az"), ByteRange(b"09")},
+                {*byte_range(b"az"), *byte_range(b"09")},
             ),
             (
                 r"[^abc]+",
                 "ABCxyz8743-!@#$%^&*()_+a",
                 b"ABCxyz8743-!@#$%^&*()_+",
                 b"a",
-                {ByteRange(b"\x00`"), ByteRange(b"d\x7f")},
+                {*byte_range(b"\x00`"), *byte_range(b"d\x7f")},
             ),
             (
                 r"[^\d]+",
                 "abcXYZ-!@#$%^&*()_+6",
                 b"abcXYZ-!@#$%^&*()_+",
                 b"6",
-                {ByteRange(b"\x00/"), ByteRange(b":\x7f")},
+                {*byte_range(b"\x00/"), *byte_range(b":\x7f")},
             ),
             (
                 r"[^B-Z]+",
                 "qwertyAB",
                 b"qwertyA",
                 b"B",
-                {ByteRange(b"\x00A"), ByteRange(b"[\x7f")},
+                {*byte_range(b"\x00A"), *byte_range(b"[\x7f")},
             ),
             (
                 r"[^a-z\d]+",
                 "ABCDEF-!@#$%^&*()_+x",
                 b"ABCDEF-!@#$%^&*()_+",
                 b"x",
-                {ByteRange(b"\x00/"), ByteRange(b":`"), ByteRange(b"{\x7f")},
+                {*byte_range(b"\x00/"), *byte_range(b":`"), *byte_range(b"{\x7f")},
             ),
             (
                 r"[^\n]+",
                 "ABCxyz8743-!@#$%^&*()_+\n",
                 b"ABCxyz8743-!@#$%^&*()_+",
                 b"\n",
-                {ByteRange(b"\x00\t"), ByteRange(b"\x0b\x7f")},
+                {*byte_range(b"\x00\t"), *byte_range(b"\x0b\x7f")},
             ),
         ],
     )
@@ -185,42 +187,42 @@ class TestQuantifiers:
                 "axb",
                 b"a",
                 b"x",
-                {Byte(b"a"), Byte(b"b")},
+                {b"a", b"b"},
             ),  # 'x' disrupts the match
             (
                 r"a+b",
                 "b",
                 b"",
                 b"b",
-                {Byte(b"a")},
+                {b"a"},
             ),  # 'a+' requires at least one 'a' before 'b'
             (
                 r"a?b",
                 "x",
                 b"",
                 b"x",
-                {Byte(b"a"), Byte(b"b")},
+                {b"a", b"b"},
             ),  # 'a?' requires zero or one 'a' before 'b'
             (
                 r"a?b",
                 "axb",
                 b"a",
                 b"x",
-                {Byte(b"b")},
+                {b"b"},
             ),  # 'x' disrupts the match
             (
                 r"a?b",
                 "aab",
                 b"a",
                 b"a",
-                {Byte(b"b")},
+                {b"b"},
             ),  # Second 'a' is too many
             (
                 r"(xyz)?abc",
                 "xyabc",
                 b"xy",
                 b"a",
-                {Byte(b"z")},
+                {b"z"},
             ),  # Expected 'z'
             (
                 r"(xyz)?abc",
@@ -248,14 +250,14 @@ class TestQuantifiers:
                 "aab",
                 b"aa",
                 b"b",
-                {Byte(b"a")},
+                {b"a"},
             ),  # Less than the minimum 'a's before 'b'
             (
                 r"a{3,5}b",
                 "aaaaaab",
                 b"aaaaa",
                 b"a",
-                {Byte(b"b")},
+                {b"b"},
             ),  # More than the maximum 'a's before 'b'
         ],
     )
@@ -332,49 +334,49 @@ class TestAlternations:
                 "c",
                 b"",
                 b"c",
-                {Byte(b"a"), Byte(b"b")},
+                {b"a", b"b"},
             ),  # Neither 'a' nor 'b'
             (
                 r"apple|orange",
                 "banana",
                 b"",
                 b"b",
-                {Byte(b"a"), Byte(b"o")},
+                {b"a", b"o"},
             ),  # Neither 'apple' nor 'orange'
             (
                 r"100|200",
                 "300",
                 b"",
                 b"3",
-                {Byte(b"1"), Byte(b"2")},
+                {b"1", b"2"},
             ),  # Neither '100' nor '200'
             (
                 r"(a|b)c|d",
                 "ae",
                 b"a",
                 b"e",
-                {Byte(b"c"), Byte(b"c")},
+                {b"c", b"c"},
             ),  # Neither 'ac' nor 'bc' nor 'd'
             (
                 r"(a|b)+",
                 "abbaabbabc",
                 b"abbaabbab",
                 b"c",
-                {Byte(b"a"), Byte(b"b")},
+                {b"a", b"b"},
             ),  # 'c' does not match pattern '(a|b)+'
             (
                 r"cat|dog",
                 "car",
                 b"ca",
                 b"r",
-                {Byte(b"t")},
+                {b"t"},
             ),  # 't' should be forced
             (
                 r"(dog|cat)s?",
                 "cars",
                 b"ca",
                 b"r",
-                {Byte(b"t")},
+                {b"t"},
             ),  # 't' should be forced
         ],
     )
@@ -399,7 +401,7 @@ class TestDot:
     )
     def test_dot(self, pattern, string):
         grammar_callable = partial(regex, pattern=pattern)
-        generate_and_check(grammar_callable, string, stop_char="\n")
+        generate_and_check(grammar_callable, string)
 
     @pytest.mark.parametrize(
         "pattern, string, good_bytes, failure_byte, allowed_bytes",
@@ -409,7 +411,7 @@ class TestDot:
                 "ABCxyz8743-!@#$%^&*()_+\n",
                 b"ABCxyz8743-!@#$%^&*()_+",
                 b"\n",
-                {ByteRange(b"\x00\t"), ByteRange(b"\x0b\x7f")},
+                {*byte_range(b"\x00\t"), *byte_range(b"\x0b\x7f")},
             ),
         ],
     )
@@ -427,25 +429,25 @@ class TestDot:
 
 class TestSpecialCharacters:
     @pytest.mark.parametrize(
-        "pattern, string, stop_char",
+        "pattern, string",
         [
-            (r"\d+", "1234567890", chr(7)),
-            (r"[^\D]+", "1234567890", chr(7)),
-            (r"\D+", "ABCxyz-!@#$%^&*()_+", "9"),
-            (r"[^\d]+", "ABCxyz-!@#$%^&*()_+", "9"),
-            (r"\w+", "abcABC123_", chr(7)),
-            (r"[^\W]+", "abcABC123_", chr(7)),
-            (r"\W+", " -!@#$%^&*()+", "9"),
-            (r"[^\w]+", "-!@#$%^&*()+", "9"),
-            (r"\s+", " \t\n\r\f\v", chr(7)),
-            (r"[^\S]+", " \t\n\r\f\v", chr(7)),
-            (r"\S+", "ABCxyz8743-!@#$%^&*()_+", " "),
-            (r"[^\s]+", "ABCxyz8743-!@#$%^&*()_+", " "),
+            (r"\d+", "1234567890"),
+            (r"[^\D]+", "1234567890"),
+            (r"\D+", "ABCxyz-!@#$%^&*()_+"),
+            (r"[^\d]+", "ABCxyz-!@#$%^&*()_+"),
+            (r"\w+", "abcABC123_"),
+            (r"[^\W]+", "abcABC123_"),
+            (r"\W+", " -!@#$%^&*()+"),
+            (r"[^\w]+", "-!@#$%^&*()+"),
+            (r"\s+", " \t\n\r\f\v"),
+            (r"[^\S]+", " \t\n\r\f\v"),
+            (r"\S+", "ABCxyz8743-!@#$%^&*()_+"),
+            (r"[^\s]+", "ABCxyz8743-!@#$%^&*()_+"),
         ],
     )
-    def test_good(self, pattern, string, stop_char):
+    def test_good(self, pattern, string):
         grammar_callable = partial(regex, pattern=pattern)
-        generate_and_check(grammar_callable, string, stop_char=stop_char)
+        generate_and_check(grammar_callable, string)
 
     @pytest.mark.parametrize(
         "pattern, string, good_bytes, failure_byte, allowed_bytes",
@@ -455,21 +457,21 @@ class TestSpecialCharacters:
                 "0123456789x",
                 b"0123456789",
                 b"x",
-                {ByteRange(b"09")},
+                byte_range(b"09"),
             ),
             (
                 r"\D+",
                 "ABCxyz-!@#$%^&*()_+1",
                 b"ABCxyz-!@#$%^&*()_+",
                 b"1",
-                {ByteRange(b"\x00/"), ByteRange(b":\x7f")},
+                {*byte_range(b"\x00/"), *byte_range(b":\x7f")},
             ),
             (
                 r"\w+",
                 "abcABC123_@",
                 b"abcABC123_",
                 b"@",
-                {ByteRange(b"az"), ByteRange(b"AZ"), ByteRange(b"09"), Byte(b"_")},
+                {*byte_range(b"az"), *byte_range(b"AZ"), *byte_range(b"09"), b"_"},
             ),
             (
                 r"\W+",
@@ -477,11 +479,11 @@ class TestSpecialCharacters:
                 b" -!@#$%^&*()+",
                 b"a",
                 {
-                    ByteRange(b"\x00/"),
-                    ByteRange(b":@"),
-                    ByteRange(b"[^"),
-                    Byte(b"`"),
-                    ByteRange(b"{\x7f"),
+                    *byte_range(b"\x00/"),
+                    *byte_range(b":@"),
+                    *byte_range(b"[^"),
+                    b"`",
+                    *byte_range(b"{\x7f"),
                 },
             ),
             (
@@ -490,12 +492,7 @@ class TestSpecialCharacters:
                 b" \t\n\r\f\v",
                 b"8",
                 {
-                    Byte(b" "),
-                    Byte(b"\t"),
-                    Byte(b"\n"),
-                    Byte(b"\r"),
-                    Byte(b"\f"),
-                    Byte(b"\v"),
+                    b" ", b"\t", b"\n", b"\r", b"\f", b"\v",
                 },
             ),
             (
@@ -503,7 +500,7 @@ class TestSpecialCharacters:
                 "abcABC123_ ",
                 b"abcABC123_",
                 b" ",
-                {ByteRange(b"\x00\x08"), ByteRange(b"\x0e\x1f"), ByteRange(b"!\x7f")},
+                {*byte_range(b"\x00\x08"), *byte_range(b"\x0e\x1f"), *byte_range(b"!\x7f")},
             ),
         ],
     )
