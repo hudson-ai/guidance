@@ -26,7 +26,7 @@ def to_compact_json(target: Any) -> str:
     """
     return json_dumps(
         target, separators=(",", ":"), default=pydantic_to_jsonable_python
-    ) + " "
+    )
 
 
 def validate_obj(

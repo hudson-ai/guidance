@@ -33,7 +33,7 @@ def _to_compact_json(target: Any) -> str:
     # Since this is ultimately about the generated
     # output, we don't need to worry about pretty printing
     # and whitespace
-    return json_dumps(target, separators=(",", ":")) + " "
+    return json_dumps(target, separators=(",", ":"))
 
 
 class Keyword(str, Enum):
