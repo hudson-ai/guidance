@@ -92,7 +92,7 @@ def _gen_json_number(lm):
 
 @guidance(stateless=True)
 def _gen_json_string(lm):
-    return lm + lexeme(r'"(\\(["\\\/bfnrt]|u[a-fA-F0-9]{4})|[^"\\\x00-\x1F\x7F]+)*"')
+    return lm + lexeme(r'"(\\(["\\\/bfnrt]|u[a-fA-F0-9]{4})|[^"\\\x00-\x1F\x7F]+)*"', contextual=True)
 
 
 @guidance(stateless=True)
@@ -367,6 +367,7 @@ def json(
         "pydantic.TypeAdapter",
     ] = None,
     temperature: float = 0.0,
+    max_tokens: int = 100000000,
 ):
     """Generate valid JSON according to the supplied JSON schema or `pydantic` model.
 
@@ -431,6 +432,7 @@ def json(
             body=_gen_json(json_schema=schema, definitions=definitions),
             skip_regex=r"[\x20\x0A\x0D\x09]+", # whitespace
             no_initial_skip=True,
+            max_tokens=max_tokens,
         ),
         temperature=temperature,
     )
@@ -444,7 +446,7 @@ def _build_definitions(
     def build_definition(
         json_schema: Mapping[str, Any]
     ) -> Callable[[], GrammarFunction]:
-        @guidance(stateless=True, dedent=False)
+        @guidance(stateless=True, dedent=False, cache=True)
         def closure(lm):
             return lm + _gen_json(json_schema=json_schema, definitions=definitions)
 
