@@ -1,10 +1,9 @@
 import requests
 import os
-import base64
 import json
 import urllib.parse
+from typing import Iterator
 from ._model import Engine, Model, EngineCallResponse
-from .._parser import LLParser
 from ..chat import Phi3ChatTemplate
 from ._byte_tokenizer import ByteTokenizer
 
@@ -42,7 +41,7 @@ class AzureGuidanceEngine(Engine):
         # build the Engine
         super().__init__(tokenizer=tokenizer, compute_log_probs=False)
 
-    def __call__(self, parser, grammar, ensure_bos_token=True):
+    def __call__(self, prompt, grammar, ensure_bos_token=True) -> Iterator[EngineCallResponse]:
         serialized = {"grammar": grammar.ll_serialize()}
         # this is a hack to avoid loops
         serialized["grammar"]["max_tokens"] = self.max_streaming_tokens
@@ -50,7 +49,7 @@ class AzureGuidanceEngine(Engine):
         data = {
             "controller": "llguidance",
             "controller_arg": serialized,
-            "prompt": parser,
+            "prompt": prompt,
             "max_tokens": self.max_streaming_tokens,
             "temperature": 0.0, # this is just default temperature
         }
