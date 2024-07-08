@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 from ._guidance_engine_metrics import GuidanceEngineMetrics
 from .._utils import softmax, CaptureEvents
-from .._parser import LLParser, Parser, ParserResponse, GenData
 from .._grammar import (
     GrammarFunction,
     string,
