@@ -1,3 +1,4 @@
+import os
 import base64
 import copy
 import html
@@ -11,7 +12,7 @@ import warnings
 import json
 
 from pprint import pprint
-from typing import Dict, Iterator, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterator, List, Optional, TYPE_CHECKING
 
 
 import numpy as np
@@ -129,9 +130,6 @@ class Engine:
 
     def __init__(self, tokenizer: Tokenizer, compute_log_probs=False):
         self.tokenizer = tokenizer
-        self.ll_tokenizer = llguidance.LLTokenizer(
-            llguidance.TokenizerWrapper(tokenizer)
-        )
         self.compute_log_probs = compute_log_probs
         self.metrics = GuidanceEngineMetrics()
 
@@ -141,22 +139,8 @@ class Engine:
     def reset_metrics(self):
         self.metrics = GuidanceEngineMetrics()
 
-    def start(self, parser, grammar, ensure_bos_token=True):
-        """Start processing parser state executed through the grammar.
-
-        Parameters
-        ----------
-        parser : str or Parser
-            This is represents the current state of a guidance parser that will be extended
-            using the passed grammar. If a string is given then we assume the previous parser
-            state is just a fixed string prompt, if a full Parser is given then we extend that
-            parser by appending the new grammar to the parser's current grammar and then
-            inferencing the model. (TODO: implement full parser extension support)
-        grammar: Grammar
-            This is the grammar we are extending the parser with.
-        """
-        # def __call__(self, grammar, max_tokens=1000000, n=1, top_p=1, temperature=0.0, ensure_bos_token=True):
-        # assert n == 1, "Still need to add support for n > 1!"
+    def _start(self, prompt, grammar, ensure_bos_token=True) -> tuple[llguidance.LLInterpreter, list[int]]:
+        """Start processing parser state executed through the grammar."""
 
         # note we only support a fixed set of engine variables for the sake of security
         self._replacements = replace_model_variables(
@@ -164,59 +148,38 @@ class Engine:
         )
 
         # right now we only support a text/bytes prompt parser state, so we extract that
-        if isinstance(parser, bytes):
-            prompt = parser
-        elif isinstance(parser, str):
-            prompt = bytes(parser, encoding="utf8")
-        elif isinstance(parser, Parser):
-            raise NotImplementedError(
-                "Still need to implement support for extending a full Parser state."
-            )
+        if isinstance(prompt, bytes):
+            prompt = prompt
+        elif isinstance(prompt, str):
+            prompt = bytes(prompt, encoding="utf8")
         else:
             raise Exception("The passed parser is of an unknown type!")
 
-        self._parser = LLParser(
-            grammar=grammar,
-            tokenizer=self.tokenizer,
-            prompt=prompt,
-            ensure_bos_token=ensure_bos_token
+        ll_interpreter = llguidance.LLInterpreter(
+            llguidance.LLTokenizer(llguidance.TokenizerWrapper(self.tokenizer)),
+            json.dumps(grammar.ll_serialize()),
+            log_level=int(os.environ.get("LLGUIDANCE_LOG_LEVEL", "1"))
         )
 
-    def next(self) -> Optional[EngineCallResponse]:
-        """Move the grammar state machine processing forward to the next point where
-            either get_logits is required to be called or we have a partial response
-            to stream back.
-
-        Parameters
-        ----------
-        logits : the logits obtained from the LLM after the last return from next(...)
-        """
-        if self._parser.done():
-            return None
-
-        gen_data, response = self._parser.advance()
-
-        if gen_data is not None:
-            # TODO: get rid of extra args of get_logits
-            logits = self.get_logits(gen_data.tokens, None, None)
-            tok = self.sample_with_temperature(logits, gen_data.mask, gen_data.temperature)
-            self._parser.consume_token(tok)
-
-        return EngineCallResponse(
-            new_bytes=response.new_bytes,
-            is_generated=response.is_generated,
-            new_bytes_prob=response.new_bytes_prob,
-            capture_groups=response.capture_groups,
-            capture_group_log_probs=response.capture_group_log_probs,
-            new_token_count=response.new_token_count, 
+        prompt_tokens = ll_interpreter.process_prompt(
+                self.tokenizer.encode(prompt)
         )
+        if (
+            ensure_bos_token
+            and self.tokenizer.bos_token is not None
+            and prompt_tokens[:1] != [self.tokenizer.bos_token_id]
+        ):
+            # add the beginning of sequence token if needed
+            prompt_tokens = [self.tokenizer.bos_token_id] + prompt_tokens
 
-    def __call__(self, parser, grammar, ensure_bos_token=True) -> Iterator[EngineCallResponse]:
+        return ll_interpreter, prompt_tokens
+
+    def __call__(self, prompt, grammar, ensure_bos_token=True) -> Iterator[EngineCallResponse]:
         """Returns a new updated parser state executed through the grammar.
 
         Parameters
         ----------
-        parser : str or Parser
+        prompt : str or Parser
             This is represents the current state of a guidance parser that will be extended
             using the passed grammar. If a string is given then we assume the previous parser
             state is just a fixed string prompt, if a full Parser is given then we extend that
@@ -225,20 +188,54 @@ class Engine:
         grammar: Grammar
             This is the grammar we are extending the parser with.
         """
-        self.start(parser, grammar, ensure_bos_token)
+        interp, tokens = self._start(prompt, grammar, ensure_bos_token)
 
+        backtrack: int = 0
+        step_tokens: list[int] = []
         while True:
-            response = self.next()
-            if response is None:
-                break
+            mask, resp = interp.mid_process(backtrack, step_tokens)
+
+            r = json.loads(resp)
+            progress: List[dict] = r["progress"]
+            response = self._progress_to_response(progress)
+            if r["stop"]:
+                yield response
+                return
+            backtrack = r["backtrack"]
+            step_tokens = r["ff_tokens"]
+
+            if mask is not None:
+                assert backtrack == 0
+                assert len(step_tokens) == 0
+                tok = self.get_next_token(tokens, mask, r["temperature"])
+                step_tokens = [tok]
+            elif backtrack:
+                del tokens[-backtrack:]
+            tokens.extend(step_tokens)
+
             yield response
 
-    def get_logits(self, token_ids, forced_bytes, current_temp):
-        """A fake method designed to be overriden by subclasses."""
-        # pretend to extend the KV cache and update the log probs
-        return np.randn(len(self.tokenizer.tokens))
+    def get_next_token(self, prompt_tokens: list[int], token_mask: bytes, temperature: float) -> int:
+        """Returns the next token to be added to the prompt.
 
-    def sample_with_temperature(self, logits: np.ndarray, mask: np.ndarray, temperature: float):
+        Parameters
+        ----------
+        prompt_tokens : list[int]
+            The current tokens in the prompt.
+        token_mask : bytes
+            The mask that represents the possible tokens that can be added.
+        temperature : float
+            The temperature to sample the next token with.
+        """
+        logits = self.get_logits(prompt_tokens, token_mask, temperature)
+        tok = self.sample_with_temperature(logits, token_mask, temperature)
+        return tok
+
+    def get_logits(self, token_ids, forced_bytes, current_temp):
+        raise NotImplementedError
+
+    def sample_with_temperature(self, logits: np.ndarray, mask: bytes, temperature: float):
+        mask = np.frombuffer(mask, dtype=np.uint8)
         logits = logits + mask
         if temperature < 0.0001:
             return int(np.argmax(logits))
@@ -253,6 +250,52 @@ class Engine:
         return Exception(
             "We can't consume any more tokens, but we are not yet done! Perhaps your model's token set is incomplete? This happened after the prompt:"
             + str(prompt[-40:])
+        )
+
+    @staticmethod
+    def _progress_to_response(progress: List[dict]) -> EngineCallResponse:
+        new_bytes = b""
+        new_token_count = 0
+        new_bytes_prob = 0.0
+        is_generated = False
+        capture_groups: Dict[str, Any] = {}
+        capture_group_log_probs: Dict[str, Any] = {}
+        num_text_entries = 0
+
+        for j in progress:
+            tag = j.get("object", "")
+            if tag == "capture":
+                is_generated = True
+                cname: str = j["name"]
+                data = bytes.fromhex(j["hex"])
+                if cname.startswith("__LIST_APPEND:"):
+                    cname = cname[14:]
+                    if cname not in capture_groups or \
+                        not isinstance(capture_groups[cname], list):
+                        capture_groups[cname] = []
+                        capture_group_log_probs[cname] = []
+                    capture_groups[cname].append(data)
+                    capture_group_log_probs[cname].append(j["log_prob"])
+                else:
+                    capture_groups[cname] = data
+                    capture_group_log_probs[cname] = j["log_prob"]
+            elif tag == "text":
+                # it actually should only happen once per round...
+                new_bytes += bytes.fromhex(j["hex"])
+                new_token_count += j["num_tokens"]
+                new_bytes_prob += j["log_prob"]
+                is_generated |= j["is_generated"]
+                num_text_entries += 1
+        if num_text_entries > 0:
+            new_bytes_prob /= num_text_entries
+
+        return EngineCallResponse(
+            new_bytes=new_bytes,
+            new_token_count=new_token_count,
+            new_bytes_prob=new_bytes_prob,
+            is_generated=is_generated,
+            capture_groups=capture_groups,
+            capture_group_log_probs=capture_group_log_probs,
         )
 
 

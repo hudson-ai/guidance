@@ -94,15 +94,8 @@ class AzureGuidanceEngine(Engine):
                     if err:
                         raise RuntimeError(f"Error returned by grammar server {err}.")
 
-                    data = LLParser._handle_progress(progress)
-                    yield EngineCallResponse(
-                        new_bytes=data.new_bytes,
-                        is_generated=data.is_generated,
-                        new_bytes_prob=data.new_bytes_prob,
-                        capture_groups=data.capture_groups,
-                        capture_group_log_probs=data.capture_group_log_probs,
-                        new_token_count=data.new_token_count,
-                    )
+                    response = self._progress_to_response(progress)
+                    yield response
             elif decoded_line == "data: [DONE]":
                 pass
             else:
