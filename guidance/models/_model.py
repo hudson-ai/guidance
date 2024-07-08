@@ -207,7 +207,13 @@ class Engine:
             if mask is not None:
                 assert backtrack == 0
                 assert len(step_tokens) == 0
+                if not any(mask):
+                    raise self._report_failed_match(prompt)
                 tok = self.get_next_token(tokens, mask, r["temperature"])
+                if not mask[tok]:
+                    raise Exception(
+                        f"Model returned illegal {tok} that is not in the mask!"
+                    )
                 step_tokens = [tok]
             elif backtrack:
                 del tokens[-backtrack:]
