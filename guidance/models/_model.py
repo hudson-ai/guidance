@@ -195,13 +195,15 @@ class Engine:
             mask, resp = interp.mid_process(backtrack, step_tokens)
 
             r = json.loads(resp)
-            progress: List[dict] = r["progress"]
-            response = self._progress_to_response(progress)
-            if r["stop"]:
-                yield response
-                return
             backtrack = r["backtrack"]
             step_tokens = r["ff_tokens"]
+            yield self._progress_to_response(
+                r["progress"]
+            )
+            if r["stop"]:
+                assert backtrack == 0
+                assert len(step_tokens) == 0
+                return
 
             if mask is not None:
                 assert backtrack == 0
@@ -217,8 +219,6 @@ class Engine:
             elif backtrack:
                 del tokens[-backtrack:]
             tokens.extend(step_tokens)
-
-            yield response
 
     def get_next_token(self, prompt_tokens: list[int], token_mask: bytes, temperature: float) -> int:
         """Returns the next token to be added to the prompt.
