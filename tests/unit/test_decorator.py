@@ -1,6 +1,7 @@
 import guidance
 import re
 
+
 class TestDedent:
 
     def test_string(self):
@@ -11,6 +12,7 @@ class TestDedent:
             second line
             third line"""
             return lm
+
         lm = guidance.models.Mock()
         lm += string()
         assert str(lm) == "first line\nsecond line\nthird line"
@@ -24,6 +26,7 @@ class TestDedent:
             }}
             """
             return lm
+
         lm = guidance.models.Mock()
         lm += f_string()
-        assert re.fullmatch(r'\{\n    \"name\": \"[^\"]+\",\n\}\n', str(lm))
+        assert re.fullmatch(r"\{\n    \"name\": \"[^\"]+\",\n\}\n", str(lm))
