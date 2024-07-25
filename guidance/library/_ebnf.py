@@ -6,7 +6,8 @@ from lark.grammar import NonTerminal, Rule, Terminal
 
 from .._grammar import GrammarFunction, Join
 from .._guidance import guidance
-from . import capture, regex, select
+from ._subgrammar import subgrammar, lexeme
+from . import capture, select
 
 
 class EBNF:
@@ -15,8 +16,12 @@ class EBNF:
         self.parser = Lark(grammar, start=start)  # kwds?
 
         # grammars for nonterminals -- regex seems to be the simplest solution
+        self.terminal_regexes: dict[Terminal, str] = {
+            Terminal(terminal.name): terminal.pattern.to_regexp()
+            for terminal in self.parser.terminals
+        }
         self.terminal_grammars: dict[Terminal, GrammarFunction] = {
-            Terminal(terminal.name): regex(pattern=terminal.pattern.to_regexp())
+            Terminal(terminal.name): lexeme(terminal.pattern.to_regexp())
             for terminal in self.parser.terminals
         }
 
@@ -78,4 +83,10 @@ class EBNF:
 
 @guidance(stateless=True)
 def ebnf(lm, name=None, *, grammar: str, start: str):
-    return lm + capture(EBNF(grammar, start).build(), name=name)
+    ebnf = EBNF(grammar, start)
+    ignore_rx = '|'.join(ebnf.terminal_regexes[Terminal(name)] for name in ebnf.parser.ignore_tokens)
+    return lm + subgrammar(
+        name=name,
+        body=ebnf.build(),
+        skip_regex=ignore_rx
+    )
