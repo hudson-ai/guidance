@@ -1,8 +1,9 @@
 from collections import defaultdict
-from typing import Callable, Union
+from typing import Callable, Union, Optional, Sequence
 
 from lark import Lark
 from lark.grammar import NonTerminal, Rule, Terminal
+from lark.load_grammar import FromPackageLoader
 
 from .._grammar import GrammarFunction, Join
 from .._guidance import guidance
@@ -11,9 +12,24 @@ from . import capture, select
 
 
 class EBNF:
-    def __init__(self, grammar: str, start: str):
-        self.start = start
-        self.parser = Lark(grammar, start=start)  # kwds?
+    @classmethod
+    def open(cls, path: str, **kwargs):
+        parser = Lark.open(path, **kwargs)
+        return cls(parser)
+
+    @classmethod
+    def from_package(cls, package: str, grammar_path: str, search_paths: Sequence[str]=[""], **kwargs):
+        parser = Lark.open_from_package(package, grammar_path, search_paths, **kwargs)
+        return cls(parser)
+    
+    @classmethod
+    def from_grammar_string(cls, grammar: str, **kwargs):
+        parser = Lark(grammar, **kwargs)
+        return cls(parser)
+        
+    def __init__(self, parser: Lark):
+        self.parser = parser
+        self.start = self.parser.options.options['start']
 
         # grammars for nonterminals -- regex seems to be the simplest solution
         self.terminal_regexes: dict[Terminal, str] = {
@@ -76,17 +92,18 @@ class EBNF:
         inner.__name__ = nonterminal.name
         return guidance(inner, stateless=True, dedent=False, cache=True)
 
-    def build(self) -> GrammarFunction:
+    def build(self, name=None) -> GrammarFunction:
         # Trigger recursive build of grammar using start nonterminal
-        return self.build_term(NonTerminal(self.start))
+        body = select([
+            self.build_term(NonTerminal(s))
+            for s in self.start
+        ])
+        ignore_rx = '|'.join(self.terminal_regexes[Terminal(name)] for name in self.parser.ignore_tokens)
+        return subgrammar(
+            name=name,
+            body=body,
+            skip_regex=ignore_rx
+        )
 
-
-@guidance(stateless=True)
-def ebnf(lm, name=None, *, grammar: str, start: str):
-    ebnf = EBNF(grammar, start)
-    ignore_rx = '|'.join(ebnf.terminal_regexes[Terminal(name)] for name in ebnf.parser.ignore_tokens)
-    return lm + subgrammar(
-        name=name,
-        body=ebnf.build(),
-        skip_regex=ignore_rx
-    )
+def ebnf():
+    pass
