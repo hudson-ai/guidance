@@ -3,11 +3,14 @@ import os
 import json
 import urllib.parse
 from ._model import Engine, Model
-from .._schema import LLProgress
+from .._schema import LLProgress, EngineCallResponse
 from ..chat import Phi3MiniChatTemplate
 from ._byte_tokenizer import ByteTokenizer
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Iterator, AsyncIterator
+import httpx
 
+# TODO: put me in a better place?
+client = httpx.AsyncClient()
 
 class AzureGuidanceEngine(Engine):
     """This connects to a remote guidance server on Azure and runs all computation using the remote engine."""
@@ -42,7 +45,7 @@ class AzureGuidanceEngine(Engine):
         # build the Engine
         super().__init__(tokenizer=tokenizer, compute_log_probs=False)
 
-    def __call__(self, parser, grammar, ensure_bos_token=True):
+    def __call__(self, parser, grammar, ensure_bos_token=True) -> Iterator[EngineCallResponse]:
         serialized = {"grammar": grammar.ll_serialize()}
         # this is a hack to avoid loops
         serialized["grammar"]["max_tokens"] = self.max_streaming_tokens
@@ -79,6 +82,93 @@ class AzureGuidanceEngine(Engine):
             if not line:
                 continue
             decoded_line: str = line.decode("utf-8")
+            if decoded_line.startswith("data: {"):
+                d = json.loads(decoded_line[6:])
+                if "forks" not in d:
+                    continue
+                for ch in d["forks"]:
+                    if "Previous WASM Error" in ch["logs"]:
+                        raise RuntimeError("Previous WASM Error.")
+                    idx = ch["index"]
+                    assert idx == 0, "unexpected index in response from server"
+                    progress = []
+                    for ln in ch["logs"].split("\n"):
+                        ln: str
+                        if ln.startswith("JSON-OUT: "):
+                            j = json.loads(ln[10:])
+                            progress.append(j)
+                        # don't print warnings if log_level >= 0, since we're 
+                        # going to print them anyway below together with the
+                        # rest of the logs
+                        elif ln.startswith("Warning: ") and self.log_level < 2:
+                            if self.log_level >= 1:
+                                print(ln, flush=True)
+                    progress = LLProgress.model_validate(progress)
+
+                    if self.log_level >= 2:
+                        print(ch["logs"].rstrip("\n"), flush=True)
+
+                    err = ch.get("error", "")
+                    if err:
+                        raise RuntimeError(f"Error returned by grammar server {err}.")
+
+                    # TODO: these metrics may be a little off -- notice the `-1` (which is a hack for passing
+                    # tests in tests/model_integration/library/test_gen.py for now, may have to do with BOS?)
+                    usage = d["usage"]
+                    self.metrics.engine_input_tokens = usage["ff_tokens"]
+                    self.metrics.engine_output_tokens = usage["sampled_tokens"] - 1
+
+                    yield progress.to_engine_call_response()
+
+            elif decoded_line == "data: [DONE]":
+                pass
+            else:
+                raise RuntimeError(f"bad response line: {decoded_line}")
+            
+    def to_async(self):
+        return AsyncAzureGuidanceEngine(self.conn_str, self.max_streaming_tokens, None, self.log_level)
+
+class AsyncAzureGuidanceEngine(AzureGuidanceEngine):
+    async def __call__(self, prompt, grammar, ensure_bos_token=True) -> AsyncIterator[EngineCallResponse]: # type: ignore[override]
+
+        serialized = {"grammar": grammar.ll_serialize()}
+        # this is a hack to avoid loops
+        serialized["grammar"]["max_tokens"] = self.max_streaming_tokens
+        # print(json.dumps(serialized))
+        data = {
+            "controller": "llguidance",
+            "controller_arg": serialized,
+            "prompt": prompt,
+            "max_tokens": self.max_streaming_tokens,
+            "temperature": 0.0,  # this is just default temperature
+        }
+
+        url, headers, info = _mk_url("run", conn_str=self.conn_str)
+        if self.log_level >= 4:
+            print(f"POST {info}", flush=True)
+        if self.log_level >= 5:
+            print(f"  {json.dumps(data, indent=None)}", flush=True)
+
+        req = client.build_request("POST", url, headers=headers, json=data)
+        resp = await client.send(req, stream=True)
+
+        if resp.status_code != 200:
+            text = resp.text
+            try:
+                d = json.loads(text)
+                if "message" in d:
+                    text = d["message"]
+            except:
+                pass
+            raise RuntimeError(
+                f"Bad response to Guidance request\nRequest: {info}\n"
+                + f"Response: {resp.status_code} {resp.reason}\n{text}"
+            )
+
+        async for line in resp.aiter_lines():
+            if not line:
+                continue
+            decoded_line: str = line#.decode("utf-8")
             if decoded_line.startswith("data: {"):
                 d = json.loads(decoded_line[6:])
                 if "forks" not in d:
