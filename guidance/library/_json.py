@@ -70,12 +70,6 @@ class ObjectKeywords(str, Enum):
     ADDITIONAL_PROPERTIES = "additionalProperties"
     REQUIRED = "required"
 
-TYPE_SPECIFIC_KEYWORDS = {
-    JSONType.STRING: StringKeywords,
-    JSONType.ARRAY: ArrayKeywords,
-    JSONType.OBJECT: ObjectKeywords,
-}
-
 DEFS_KEYS = {"$defs", "definitions"}
 
 IGNORED_KEYS = {
@@ -97,14 +91,13 @@ IGNORED_KEYS = {
 # and possibly improve quality.
 IGNORED_KEYS.add("discriminator")
 
+VALID_KEYS = set(Keyword) | IGNORED_KEYS | DEFS_KEYS | set(StringKeywords) | set(ArrayKeywords) | set(ObjectKeywords)
+
 WHITESPACE = {b" ", b"\t", b"\n", b"\r"}
 
 def validate_json_node_keys(node: Mapping[str, Any]):
     keys = set(node.keys())
-    valid_keys = set(Keyword) | IGNORED_KEYS | DEFS_KEYS
-    if Keyword.TYPE in node and (tp:=node[Keyword.TYPE]) in TYPE_SPECIFIC_KEYWORDS:
-        valid_keys |= set(TYPE_SPECIFIC_KEYWORDS[tp])
-    invalid_keys = keys - valid_keys
+    invalid_keys = keys - VALID_KEYS
     if invalid_keys:
         raise ValueError(
             f"JSON schema had keys that could not be processed: {invalid_keys}" f"\nSchema: {node}"
