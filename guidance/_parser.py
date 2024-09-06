@@ -1,6 +1,7 @@
 import json
 import os
-from typing import Any, Generator, Optional, Tuple, Union
+from typing import Any, Generator, Optional, Iterator, Union
+from queue import Queue
 
 import llguidance  # type: ignore[import-untyped]
 import numpy as np
@@ -53,7 +54,13 @@ class TokenParser:
             log_level=int(os.environ.get("LLGUIDANCE_LOG_LEVEL", "1")),
         )
         self._generator = self._parse(prompt, ensure_bos_token)
+        self._started = False
         self._done = False
+        self._response_queue: Queue[EngineCallResponse] = Queue()
+
+    def responses(self) -> Iterator[EngineCallResponse]:
+        while not self._response_queue.empty():
+            yield self._response_queue.get()
 
     def is_accepting(self) -> bool:
         return self.ll_interpreter.is_accepting()
@@ -63,12 +70,22 @@ class TokenParser:
 
     def advance(
         self, token: Optional[int]
-    ) -> Tuple[Optional[GenData], EngineCallResponse]:
+    ) -> Optional[GenData]:
+        if self._done:
+            raise TokenParserException("Cannot advance past done state")
+
+        if token is None:
+            if self._started:
+                raise TokenParserException("Expected token, got None")
+            # Prime the generator
+            self._started = True
+            return next(self._generator)
+
         try:
             return self._generator.send(token)
-        except StopIteration as e:
+        except StopIteration:
             self._done = True
-            return None, e.value
+            return None
 
     def _process_prompt(self, prompt: bytes, ensure_bos_token: bool) -> list[int]:
         prompt_tokens = self.ll_interpreter.process_prompt(
@@ -84,18 +101,19 @@ class TokenParser:
 
         return self.tokenizer.recode(prompt_tokens)
 
-
     def _parse(
         self,
         prompt: bytes,
         ensure_bos_token: bool,
-    ) -> Generator[Tuple[Optional[GenData], EngineCallResponse], Optional[int], EngineCallResponse]:
+    ) -> Generator[GenData, int, None]:
         tokens = self._process_prompt(prompt=prompt, ensure_bos_token=ensure_bos_token)
 
         while True:
             mask, resp = self.ll_interpreter.mid_process()
             r = LLInterpreterResponse.model_validate_json(resp)
-            response = r.progress.to_engine_call_response()
+            self._response_queue.put(
+                r.progress.to_engine_call_response()
+            )
             if r.stop:
                 break
 
@@ -107,7 +125,7 @@ class TokenParser:
                     temperature=r.temperature,
                 )
                 # Send caller the mask and response; wait for token
-                token = yield (gen_data, response)
+                token = yield gen_data
                 if token is None:
                     raise TokenParserException("Expected token, got None")
                 if not mask[token]:
@@ -115,10 +133,7 @@ class TokenParser:
                     # but it's a bit clearer to handle it here
                     raise InvalidTokenException(token, gen_data.valid_next_tokens, tokens)
             else:
-                gen_data = None
-                token = yield (gen_data, response)
-                if token is not None:
-                    raise TokenParserException(f"Expected None, got token {token}")
+                token = None
 
             backtrack, ff_tokens = self.ll_interpreter.post_process(token)
             if backtrack:
@@ -129,9 +144,6 @@ class TokenParser:
         if stop_reason not in {"NoExtension", "EndOfSentence"}:
             # TODO: extend exception handling
             raise TokenParserException(f"Unexpected stop reason: {stop_reason}")
-
-        return response
-
 
 class ByteParserException(Exception):
     def __init__(self, *args, **kwargs):
@@ -155,6 +167,8 @@ class ByteParser:
         self.pos = 0
         self._variables: dict[str, Any] = {}
         self._variables_log_probs: dict[str, Any] = {}
+        # Prime the parser
+        self._advance(None)
         self.consume_bytes(prompt)
 
     def matched(self) -> bool:
@@ -184,16 +198,16 @@ class ByteParser:
             b, bts = bts[:1], bts[1:]
             self.consume_byte(b)
 
+    def _advance(self, token: Optional[int]):
+        self.gen_data = self.token_parser.advance(token)
+        for response in self.token_parser.responses():
+            self._update_capture(response)
+            self.bytes += response.new_bytes
+
     def consume_byte(self, b: bytes) -> None:
         if len(b) != 1:
             raise ValueError("consume_byte expects a single byte")
 
-        # Run underlying ll_parser and fast-forward all of our bytes
-        # until we have a "choice" (generation step) to make
-        while self.gen_data is None and not self.token_parser.done():
-            self.gen_data, response = self.token_parser.advance(None)
-            self._update_capture(response)
-            self.bytes += response.new_bytes
         # If the current position is less than the length of the bytes, then we are in fast_forward mode
         # and we need to make sure that the byte we are consuming is the same as the byte at the current
         # position
@@ -232,11 +246,8 @@ class ByteParser:
                 )
 
             # Byte was good, have ll_parser consume it so we can advance further
-            self.gen_data, response = self.token_parser.advance(b_token)
-            self._update_capture(response)
-            self.bytes += response.new_bytes
-
-            self.consume_byte(b)
+            self._advance(b_token)
+            self.pos += 1
 
     def force_done(self):
         if not self.matched():
@@ -244,9 +255,7 @@ class ByteParser:
         if self.token_parser.done():
             return
 
-        self.gen_data, response = self.token_parser.advance(self.tokenizer.eos_token_id)
-        self._update_capture(response)
-        self.bytes += response.new_bytes
+        self._advance(self.tokenizer.eos_token_id)
         if not self.token_parser.done() or not self.matched():
             raise ByteParserException("Hit end of input before reaching a valid state")
 

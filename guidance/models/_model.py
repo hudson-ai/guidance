@@ -132,31 +132,28 @@ class Engine:
         parser = self.start(prompt, grammar, ensure_bos_token)
 
         token = None
-        while not parser.done():
-            gen_data, response = parser.advance(token)
-
-            if gen_data is not None:
-                if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
-                    # Whenever we are in an accepting state, we will allow the model to generate whatever it wants
-                    # but we will treat any "illegal" tokens as EOS, allowing the model to finish gracefully.
-                    assert gen_data.mask[self.tokenizer.eos_token_id]
-                    token = self.get_next_token(
-                        token_ids=gen_data.tokens,
-                        mask=None,
-                        temperature=gen_data.temperature
-                    )
-                    if not gen_data.mask[token]:
-                        token = self.tokenizer.eos_token_id
-                else:
-                    token = self.get_next_token(
-                        token_ids=gen_data.tokens,
-                        mask=gen_data.mask,
-                        temperature=gen_data.temperature
-                    )
+        while (gen_data := parser.advance(token)) is not None:
+            if parser.is_accepting() and self.tokenizer.eos_token_id is not None:
+                # Whenever we are in an accepting state, we will allow the model to generate whatever it wants
+                # but we will treat any "illegal" tokens as EOS, allowing the model to finish gracefully.
+                assert gen_data.mask[self.tokenizer.eos_token_id]
+                token = self.get_next_token(
+                    token_ids=gen_data.tokens,
+                    mask=None,
+                    temperature=gen_data.temperature
+                )
+                if not gen_data.mask[token]:
+                    token = self.tokenizer.eos_token_id
             else:
-                token = None
+                token = self.get_next_token(
+                    token_ids=gen_data.tokens,
+                    mask=gen_data.mask,
+                    temperature=gen_data.temperature
+                )
+            yield from parser.responses()
 
-            yield response
+        # If we are done, we should yield the final responses before we exit
+        yield from parser.responses()
 
     def get_next_token(self, token_ids: list[int], mask: Optional[bytes], temperature: float) -> int:
         """Base implementation for getting the next token from the model which calls get_logits and sample_with_temperature.
