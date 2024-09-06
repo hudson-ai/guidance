@@ -4,6 +4,7 @@ from typing import Any, Dict, Set, Union, Optional
 
 import pytest
 from jsonschema import validate
+import requests
 
 from guidance import json as gen_json
 from guidance import models
@@ -14,6 +15,23 @@ from ...utils import check_match_failure as _check_match_failure
 from ...utils import check_run_with_temperature
 from ...utils import generate_and_check as _generate_and_check
 
+FHIR_SCHEMA_URL = "https://build.fhir.org/fhir.schema.json"
+FHIR_SAMPLE_DATA_URL = "https://www.hl7.org/fhir/observation-example-sample-data.json"
+
+@pytest.fixture(scope="session")
+def fhir_schema():
+    response = requests.get(FHIR_SCHEMA_URL)
+    response.raise_for_status()
+    schema_obj = response.json()
+    return schema_obj
+
+
+@pytest.fixture(scope="session")
+def fhir_data():
+    response = requests.get(FHIR_SAMPLE_DATA_URL)
+    response.raise_for_status()
+    fhir_obj = response.json()
+    return fhir_obj
 
 def generate_and_check(
     target_obj: Any, schema_obj, desired_temperature: Optional[float] = None
@@ -2222,3 +2240,7 @@ class TestRequiredPropertiesScaling:
         HITS_MAGIC_NUMBER = 1
         expected_hits = 0
         assert cache_info.hits <= expected_hits + HITS_MAGIC_NUMBER
+
+class TestBigSchema:
+    def test_big_schema(self, fhir_schema, fhir_data):
+        generate_and_check(fhir_data, fhir_schema)
