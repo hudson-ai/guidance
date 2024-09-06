@@ -180,32 +180,34 @@ class ByteParser:
         return mask
 
     def consume_bytes(self, bts: bytes) -> None:
+        while bts:
+            b, bts = bts[:1], bts[1:]
+            self.consume_byte(b)
+
+    def consume_byte(self, b: bytes) -> None:
+        if len(b) != 1:
+            raise ValueError("consume_byte expects a single byte")
+
         # Run underlying ll_parser and fast-forward all of our bytes
         # until we have a "choice" (generation step) to make
         while self.gen_data is None and not self.token_parser.done():
             self.gen_data, response = self.token_parser.advance(None)
             self._update_capture(response)
             self.bytes += response.new_bytes
-
-        if not bts:
-            return
-
-        b = bts[0]
         # If the current position is less than the length of the bytes, then we are in fast_forward mode
         # and we need to make sure that the byte we are consuming is the same as the byte at the current
         # position
         if self.pos < len(self.bytes):
-            if b != self.bytes[self.pos]:
-                next_byte = self.bytes[self.pos : self.pos + 1]
+            next_byte = self.bytes[self.pos : self.pos + 1]
+            if b != next_byte:
                 raise ByteParserException(
-                    f"Expected byte {next_byte!r} (fast_forward), got {bytes([b])!r}",
-                    current_byte=bytes([b]),
+                    f"Expected byte {next_byte!r} (fast_forward), got {b!r}",
+                    current_byte=b,
                     allowed_bytes={next_byte},
                     consumed_bytes=self.bytes[: self.pos],
                 )
             # Byte was good, move to the next byte
             self.pos += 1
-            self.consume_bytes(bts[1:])
         else:
             # If we are here, then we are either in generation mode or we are done.
             if self.gen_data is None:
@@ -213,27 +215,28 @@ class ByteParser:
                 assert self.token_parser.done()
                 assert not self.valid_next_bytes()
                 raise ByteParserException(
-                    f"Expected end of input, got {bytes([b])!r}",
-                    current_byte=bytes([b]),
+                    f"Expected end of input, got {b!r}",
+                    current_byte=b,
                     allowed_bytes=set(),
                     consumed_bytes=self.bytes[: self.pos],
                 )
             # We're in generation mode. Assure that the byte is one of the valid next bytes
-            if b not in self.gen_data.valid_next_tokens:
+            [b_token] = self.tokenizer.encode(b)
+            if b_token not in self.gen_data.valid_next_tokens:
                 valid_next_bytes = self.valid_next_bytes()
                 raise ByteParserException(
-                    f"Expected one of the following bytes: {valid_next_bytes!r}, got {bytes([b])!r}",
-                    current_byte=bytes([b]),
+                    f"Expected one of the following bytes: {valid_next_bytes!r}, got {b!r}",
+                    current_byte=b,
                     allowed_bytes=valid_next_bytes,
                     consumed_bytes=self.bytes[: self.pos],
                 )
+
             # Byte was good, have ll_parser consume it so we can advance further
-            self.gen_data, response = self.token_parser.advance(b)
+            self.gen_data, response = self.token_parser.advance(b_token)
             self._update_capture(response)
             self.bytes += response.new_bytes
 
-            # Run consume_bytes to advance ll_parser and consume the next byte
-            self.consume_bytes(bts)
+            self.consume_byte(b)
 
     def force_done(self):
         if not self.matched():
