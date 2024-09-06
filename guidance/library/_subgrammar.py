@@ -20,6 +20,8 @@ def lexeme(
         For example, /[a-z"]+/ will be quoted as /([a-z]|\\")+/.
         Defaults to False.
     """
+    # strip leading ^ and trailing $ from body_regex
+    body_regex = body_regex.lstrip("^").rstrip("$")
     return Lexeme(body_regex=body_regex, contextual=contextual, json_string=json_string)
 
 
