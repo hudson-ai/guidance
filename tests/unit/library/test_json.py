@@ -34,7 +34,7 @@ def fhir_data():
     return fhir_obj
 
 def generate_and_check(
-    target_obj: Any, schema_obj, desired_temperature: Optional[float] = None
+    target_obj: Any, schema_obj, desired_temperature: Optional[float] = None, skip_schema_validation: bool = False
 ):
     # Sanity check what we're being asked
     validate(instance=target_obj, schema=schema_obj)
@@ -45,10 +45,10 @@ def generate_and_check(
     # We partial in the grammar_callable
     if desired_temperature is not None:
         grammar_callable = partial(
-            gen_json, schema=schema_obj, temperature=desired_temperature
+            gen_json, schema=schema_obj, skip_schema_validation=skip_schema_validation, temperature=desired_temperature
         )
     else:
-        grammar_callable = partial(gen_json, schema=schema_obj)
+        grammar_callable = partial(gen_json, schema=schema_obj, skip_schema_validation=skip_schema_validation)
 
     lm = _generate_and_check(
         grammar_callable,

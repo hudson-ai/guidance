@@ -423,6 +423,7 @@ def json(
         Type["pydantic.BaseModel"],
         "pydantic.TypeAdapter",
     ] = None,
+    skip_schema_validation: bool = False,
     compact: bool = False,
     temperature: float = 0.0,
     max_tokens: int = 100000000,
@@ -474,9 +475,10 @@ def json(
         If False, output will be whitespace-flexible (i.e. decided by the model).
     """
     if isinstance(schema, Mapping):
-        # Raises jsonschema.exceptions.SchemaError or ValueError
-        # if schema is not valid
-        jsonschema.validators.Draft202012Validator.check_schema(schema)
+        if not skip_schema_validation:
+            # Raises jsonschema.exceptions.SchemaError or ValueError
+            # if schema is not valid
+            jsonschema.validators.Draft202012Validator.check_schema(schema)
     elif schema is None:
         schema = {}
     else:
