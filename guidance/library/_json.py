@@ -10,6 +10,7 @@ from typing import (
     Union,
     Type,
     TYPE_CHECKING,
+    cast,
 )
 import warnings
 
@@ -19,6 +20,9 @@ try:
 except ImportError:
     if TYPE_CHECKING:
         raise
+
+from referencing import Registry
+from referencing.jsonschema import DRAFT202012
 
 from .._guidance import guidance
 from ..library import char_range, gen, one_or_more, optional, sequence
@@ -154,7 +158,7 @@ def _gen_json_object(
     properties: Mapping[str, JSONSchema],
     additional_properties: JSONSchema,
     required: Sequence[str],
-    definitions: Mapping[str, Callable[[], GrammarFunction]],
+    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     if any(k not in properties for k in required):
         raise ValueError(f"Required properties not in properties: {set(required) - set(properties)}")
@@ -211,7 +215,7 @@ def _gen_json_array(
     item_schema: JSONSchema,
     min_items: int,
     max_items: Optional[int],
-    definitions: Mapping[str, Callable[[], GrammarFunction]],
+    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     if len(prefix_items_schema) < min_items and item_schema is False:
         raise ValueError(
@@ -280,7 +284,7 @@ def _process_anyOf(
     lm,
     *,
     anyof_list: Sequence[JSONSchema],
-    definitions: Mapping[str, Callable[[], GrammarFunction]],
+    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     options = [_gen_json(json_schema=item, definitions=definitions) for item in anyof_list]
     return lm + select(options)
@@ -299,25 +303,23 @@ def _process_enum(lm, *, options: Sequence[Mapping[str, Any]]):
 def _gen_json_any(lm):
     return lm + select(
         [
-            _gen_json(json_schema={"type": "null"}, definitions={}),
-            _gen_json(json_schema={"type": "boolean"}, definitions={}),
-            _gen_json(json_schema={"type": "integer"}, definitions={}),
-            _gen_json(json_schema={"type": "number"}, definitions={}),
-            _gen_json(json_schema={"type": "string"}, definitions={}),
+            _gen_json(json_schema={"type": "null"}),
+            _gen_json(json_schema={"type": "boolean"}),
+            _gen_json(json_schema={"type": "integer"}),
+            _gen_json(json_schema={"type": "number"}),
+            _gen_json(json_schema={"type": "string"}),
             # Recursive cases
             _gen_json(
                 json_schema={
                     "type": "array",
                     "items": True,
                 },
-                definitions={},
             ),
             _gen_json(
                 json_schema={
                     "type": "object",
                     "additionalProperties": True,
                 },
-                definitions={},
             ),
         ]
     )
@@ -327,7 +329,7 @@ def _gen_json_any(lm):
 def _gen_json(
     lm,
     json_schema: JSONSchema,
-    definitions: Mapping[str, Callable[[], GrammarFunction]],
+    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     if json_schema is True:
         json_schema = {}
@@ -353,7 +355,11 @@ def _gen_json(
         return lm + _process_anyOf(anyof_list=oneof_list, definitions=definitions)
 
     if Keyword.REF in json_schema:
-        return lm + _get_definition(reference=json_schema[Keyword.REF], definitions=definitions)
+        if definitions is None:
+            raise ValueError("Cannot resolve references without definitions")
+        key = cast(str, json_schema[Keyword.REF])
+        grammarfunc = definitions(key)
+        return lm + grammarfunc()
 
     if Keyword.CONST in json_schema:
         # TODO: can we support a whitespace-flexible version of this?
@@ -472,17 +478,10 @@ def json(
     else:
         raise TypeError(f"Unsupported schema type: {type(schema)}")
 
-    definitions: Mapping[str, Callable[[], GrammarFunction]] = {}
-    if isinstance(schema, Mapping):
-        for dk in DEFS_KEYS:
-            if dk in schema:
-                assert len(definitions) == 0, "Found duplicate definitions"
-                definitions = _build_definitions(schema[dk])
-
     return lm + with_temperature(
         subgrammar(
             name,
-            body=_gen_json(json_schema=schema, definitions=definitions),
+            body=_gen_json(json_schema=schema, definitions=definition_factory(schema)),
             skip_regex=(
                 None if compact
                 else r"[\x20\x0A\x0D\x09]+"
@@ -494,36 +493,37 @@ def json(
     )
 
 
-def _build_definitions(
-    raw_definitions: Mapping[str, JSONSchema]
-) -> Mapping[str, Callable[[], GrammarFunction]]:
-    definitions: Dict[str, Callable[[], GrammarFunction]] = {}
+def definition_factory(
+    root_schema: JSONSchema,
+) -> Callable[[str], Callable[[], GrammarFunction]]:
+    if isinstance(root_schema, bool) or root_schema == {}:
+        def bad_lookup(uri: str) -> Callable[[], GrammarFunction]:
+            raise ValueError(f"Cannot lookup URI {uri} in an empty schema")
+        return bad_lookup
 
-    def build_definition(json_schema: JSONSchema) -> Callable[[], GrammarFunction]:
+    resource = DRAFT202012.create_resource(root_schema)
+    registry = Registry().with_resource(
+        uri=resource.id() or "",
+        resource=resource
+    )
+    resolver = registry.resolver()
+
+    # QUESTION: Can we cache on URI, or do we have to cache on the resolved schema (suitibly frozen)?
+    cache: dict[str, Callable[[], GrammarFunction]] = {}
+
+    def lookup(
+        uri: str
+    ) -> Callable[[], GrammarFunction]:
+        if uri in cache:
+            return cache[uri]
+
+        schema = resolver.lookup(uri).contents
+
         @guidance(stateless=True, dedent=False, cache=True)
         def closure(lm):
-            return lm + _gen_json(json_schema=json_schema, definitions=definitions)
+            return lm + _gen_json(json_schema=schema, definitions=lookup)
 
+        cache[uri] = closure
         return closure
 
-    definitions = {ref: build_definition(schema) for ref, schema in raw_definitions.items()}
-    return definitions
-
-
-@guidance(stateless=True)
-def _get_definition(
-    lm,
-    *,
-    reference: str,
-    definitions: Mapping[str, Callable[[], GrammarFunction]],
-):
-    assert definitions is not None
-    target_definition = None
-    for dk in DEFS_KEYS:
-        ref_start = f"#/{dk}/"
-        if reference.startswith(ref_start):
-            target_name = reference[len(ref_start) :]
-            target_definition = definitions[target_name]
-
-    assert target_definition is not None
-    return lm + target_definition()
+    return lookup
