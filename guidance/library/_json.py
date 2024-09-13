@@ -23,7 +23,6 @@ except ImportError:
         raise
 
 from referencing import Registry
-from referencing._core import Resolver
 from referencing.jsonschema import DRAFT202012
 
 from .._guidance import guidance
@@ -483,18 +482,10 @@ def json(
     else:
         raise TypeError(f"Unsupported schema type: {type(schema)}")
 
-    resource = DRAFT202012.create_resource(schema)
-    uri = resource.id() or ""
-    registry = Registry().with_resource(
-        uri=uri,
-        resource=resource
-    )
-    resolver = registry.resolver().lookup(uri).resolver
-
     return lm + with_temperature(
         subgrammar(
             name,
-            body=_gen_json(json_schema=schema, definitions=definition_factory(resolver)),
+            body=_gen_json(json_schema=schema, definitions=definition_factory(schema)),
             skip_regex=(
                 None if compact
                 else r"[\x20\x0A\x0D\x09]+"
@@ -507,14 +498,22 @@ def json(
 
 
 def definition_factory(
-    resolver: Resolver,
+    schema: JSONSchema,
 ) -> Callable[[str], Callable[[], GrammarFunction]]:
+
+    resource = DRAFT202012.create_resource(schema)
+    uri = resource.id() or ""
+    registry = Registry().with_resource(
+        uri=uri,
+        resource=resource
+    )
+    resolver = registry.resolver()
 
     # QUESTION: Can we cache on URI, or do we have to cache on the resolved schema (suitibly frozen)?
     cache: dict[tuple[Optional[str], str], Callable[[], GrammarFunction]] = {}
 
     def lookup(
-        uri: str, base_uri: str = ''
+        uri: str, base_uri: Optional[str] = None
     ) -> Callable[[], GrammarFunction]:
         full_uri = (base_uri, uri)
         if full_uri in cache:
