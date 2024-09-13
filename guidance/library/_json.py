@@ -502,9 +502,9 @@ def definition_factory(
 ) -> Callable[[str], Callable[[], GrammarFunction]]:
 
     resource = DRAFT202012.create_resource(schema)
-    uri = resource.id() or ""
+    root_uri = resource.id() or ""
     registry = Registry().with_resource(
-        uri=uri,
+        uri=root_uri,
         resource=resource
     )
     resolver = registry.resolver()
@@ -513,16 +513,14 @@ def definition_factory(
     cache: dict[tuple[Optional[str], str], Callable[[], GrammarFunction]] = {}
 
     def lookup(
-        uri: str, base_uri: Optional[str] = None
+        uri: str, base_uri: Optional[str] = root_uri
     ) -> Callable[[], GrammarFunction]:
+
         full_uri = (base_uri, uri)
         if full_uri in cache:
             return cache[full_uri]
 
-        if not base_uri:
-            resolved = resolver.lookup(uri)
-        else:
-            resolved = resolver.lookup(base_uri).resolver.lookup(uri)
+        resolved = resolver.lookup(base_uri).resolver.lookup(uri)
 
         @guidance(stateless=True, dedent=False, cache=True)
         def closure(lm):
