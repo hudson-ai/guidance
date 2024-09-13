@@ -13,6 +13,7 @@ from typing import (
     cast,
 )
 import warnings
+from functools import partial
 
 try:
     import jsonschema
@@ -22,6 +23,7 @@ except ImportError:
         raise
 
 from referencing import Registry
+from referencing._core import Resolver
 from referencing.jsonschema import DRAFT202012
 
 from .._guidance import guidance
@@ -55,6 +57,9 @@ class Keyword(str, Enum):
     ALLOF = "allOf" # Note: Partial support. Only supports exactly one item.
     ONEOF = "oneOf" # Note: Partial support. This is converted to anyOf.
     REF = "$ref"
+    DYNAMIC_REF = "$dynamicRef"
+    ANCHOR = "$anchor"
+    DYNAMIC_ANCHOR = "$dynamicAnchor"
     CONST = "const"
     ENUM = "enum"
     TYPE = "type"
@@ -354,10 +359,10 @@ def _gen_json(
         warnings.warn("oneOf not fully supported, falling back to anyOf. This may cause validation errors in some cases.")
         return lm + _process_anyOf(anyof_list=oneof_list, definitions=definitions)
 
-    if Keyword.REF in json_schema:
+    if Keyword.REF in json_schema or Keyword.DYNAMIC_REF in json_schema:
         if definitions is None:
             raise ValueError("Cannot resolve references without definitions")
-        key = cast(str, json_schema[Keyword.REF])
+        key = cast(str, json_schema.get(Keyword.REF) or json_schema.get(Keyword.DYNAMIC_REF))
         grammarfunc = definitions(key)
         return lm + grammarfunc()
 
@@ -478,10 +483,18 @@ def json(
     else:
         raise TypeError(f"Unsupported schema type: {type(schema)}")
 
+    resource = DRAFT202012.create_resource(schema)
+    uri = resource.id() or ""
+    registry = Registry().with_resource(
+        uri=uri,
+        resource=resource
+    )
+    resolver = registry.resolver().lookup(uri).resolver
+
     return lm + with_temperature(
         subgrammar(
             name,
-            body=_gen_json(json_schema=schema, definitions=definition_factory(schema)),
+            body=_gen_json(json_schema=schema, definitions=definition_factory(resolver)),
             skip_regex=(
                 None if compact
                 else r"[\x20\x0A\x0D\x09]+"
@@ -494,36 +507,29 @@ def json(
 
 
 def definition_factory(
-    root_schema: JSONSchema,
+    resolver: Resolver,
 ) -> Callable[[str], Callable[[], GrammarFunction]]:
-    if isinstance(root_schema, bool) or root_schema == {}:
-        def bad_lookup(uri: str) -> Callable[[], GrammarFunction]:
-            raise ValueError(f"Cannot lookup URI {uri} in an empty schema")
-        return bad_lookup
-
-    resource = DRAFT202012.create_resource(root_schema)
-    registry = Registry().with_resource(
-        uri=resource.id() or "",
-        resource=resource
-    )
-    resolver = registry.resolver()
 
     # QUESTION: Can we cache on URI, or do we have to cache on the resolved schema (suitibly frozen)?
-    cache: dict[str, Callable[[], GrammarFunction]] = {}
+    cache: dict[tuple[Optional[str], str], Callable[[], GrammarFunction]] = {}
 
     def lookup(
-        uri: str
+        uri: str, base_uri: str = ''
     ) -> Callable[[], GrammarFunction]:
-        if uri in cache:
-            return cache[uri]
+        full_uri = (base_uri, uri)
+        if full_uri in cache:
+            return cache[full_uri]
 
-        schema = resolver.lookup(uri).contents
+        if not base_uri:
+            resolved = resolver.lookup(uri)
+        else:
+            resolved = resolver.lookup(base_uri).resolver.lookup(uri)
 
         @guidance(stateless=True, dedent=False, cache=True)
         def closure(lm):
-            return lm + _gen_json(json_schema=schema, definitions=lookup)
+            return lm + _gen_json(json_schema=resolved.contents, definitions=partial(lookup, base_uri=resolved.resolver._base_uri))
 
-        cache[uri] = closure
+        cache[full_uri] = closure
         return closure
 
     return lookup
