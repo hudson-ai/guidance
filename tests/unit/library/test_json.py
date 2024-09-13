@@ -1,9 +1,9 @@
 import json
 from functools import partial
-from typing import Any, Dict, Set, Union, Optional
+from typing import Any, Dict, Set, Optional
 
 import pytest
-from jsonschema import validate
+from jsonschema import validate, ValidationError
 
 from guidance import json as gen_json
 from guidance import models
@@ -1210,6 +1210,72 @@ class TestWithReferences:
 
         # The actual check
         generate_and_check(target_obj, schema_obj, desired_temperature=temperature)
+
+    @pytest.mark.parametrize(
+        "target_obj, valid",
+        [
+            (["a", ["b", "c"], ["d", ["e", "f"]]], True),
+            (["a", ["b", "c"], [4, ["e", "f"]]], False),
+        ]
+    )
+    @pytest.mark.parametrize(
+        "schema_obj",
+        [
+            # We can use `#` to refer to the root of the schema
+            {
+                "$id": "https://example.com/root.json",
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "$ref": "#" }
+                    ]
+                }
+            },
+            # We can also use the uri specified in `$id`
+            {
+                "$id": "https://example.com/root.json",
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        { "type": "string" },
+                        { "$ref": "https://example.com/root.json" }
+                    ]
+                }
+            },
+            # We can refer to schema in defs by $id as well
+            {
+                "$ref" : "https://example.com/stringtree.json",
+                "$defs": {
+                    "stringtree": {
+                        "$id": "https://example.com/stringtree.json",
+                        "type": "array",
+                        "items": {
+                            "anyOf": [
+                                { "type": "string" },
+                                { "$ref": "https://example.com/stringtree.json" }
+                            ]
+                        }
+                    }
+                }
+            }
+        ]
+    )
+    def test_refs_not_in_defs(self, schema_obj, target_obj, valid):
+        if valid:
+            # First sanity check what we're setting up
+            validate(instance=target_obj, schema=schema_obj)
+            # The actual check
+            generate_and_check(target_obj, schema_obj)
+        else:
+            # First sanity check what we're setting up
+            with pytest.raises(ValidationError):
+                validate(instance=target_obj, schema=schema_obj)
+            # The actual check
+            check_match_failure(
+                bad_string=_to_compact_json(target_obj),
+                schema_obj=schema_obj
+            )
 
 
 class TestAnyOf:
