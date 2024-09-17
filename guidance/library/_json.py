@@ -732,12 +732,15 @@ def resolver_factory(
     enable_http_fetch: bool = False,
 ) -> Callable[[str], Callable[[], GrammarFunction]]:
 
-    resource = DRAFT202012.create_resource(schema)
-    root_uri = resource.id() or ""
+    registry: Registry[JSONSchema]
+    resource: Resource[JSONSchema] = DRAFT202012.create_resource(schema)
+
     if enable_http_fetch:
-        registry = Registry(retrieve=retrieve_via_httpx)
+        registry = Registry(retrieve=retrieve_via_httpx)  # type: ignore[call-arg]
     else:
         registry = Registry()
+
+    root_uri = resource.id() or ""
     registry = registry.with_resource(
         uri=root_uri,
         resource=resource
