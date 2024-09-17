@@ -22,7 +22,9 @@ except ImportError:
     if TYPE_CHECKING:
         raise
 
-from referencing import Registry
+import httpx
+from functools import lru_cache
+from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from .._guidance import guidance
@@ -644,6 +646,7 @@ def json(
     compact: bool = False,
     temperature: float = 0.0,
     max_tokens: int = 100000000,
+    enable_http_fetch: bool = False,
 ):
     """Generate valid JSON according to the supplied JSON schema or `pydantic` model.
 
@@ -704,10 +707,15 @@ def json(
     else:
         raise TypeError(f"Unsupported schema type: {type(schema)}")
 
+    definition_resolver = resolver_factory(
+        schema=schema,
+        enable_http_fetch=enable_http_fetch,
+    )
+
     return lm + with_temperature(
         subgrammar(
             name,
-            body=_gen_json(json_schema=schema, definitions=definition_factory(schema)),
+            body=_gen_json(json_schema=schema, definitions=definition_resolver),
             skip_regex=(
                 None if compact
                 else r"[\x20\x0A\x0D\x09]+"
@@ -719,13 +727,18 @@ def json(
     )
 
 
-def definition_factory(
+def resolver_factory(
     schema: JSONSchema,
+    enable_http_fetch: bool = False,
 ) -> Callable[[str], Callable[[], GrammarFunction]]:
 
     resource = DRAFT202012.create_resource(schema)
     root_uri = resource.id() or ""
-    registry = Registry().with_resource(
+    if enable_http_fetch:
+        registry = Registry(retrieve=retrieve_via_httpx)
+    else:
+        registry = Registry()
+    registry = registry.with_resource(
         uri=root_uri,
         resource=resource
     )
@@ -735,7 +748,7 @@ def definition_factory(
     cache: dict[tuple[Optional[str], str], Callable[[], GrammarFunction]] = {}
 
     def lookup(
-        uri: str, base_uri: Optional[str] = root_uri
+        uri: str, base_uri: str = root_uri
     ) -> Callable[[], GrammarFunction]:
 
         full_uri = (base_uri, uri)
@@ -752,3 +765,13 @@ def definition_factory(
         return closure
 
     return lookup
+
+@lru_cache
+def retrieve_via_httpx(uri: str) -> Resource:
+    response = httpx.get(uri)
+    response.raise_for_status()
+    # We currently only support DRAFT202012, so this is hardcoded
+    resource = DRAFT202012.create_resource(
+        response.json()
+    )
+    return resource
