@@ -372,19 +372,19 @@ def _gen_json_object(
     properties: Mapping[str, JSONSchema],
     additional_properties: JSONSchema,
     required: Sequence[str],
-    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
+    definition_resolver: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     if any(k not in properties for k in required):
         raise ValueError(f"Required properties not in properties: {set(required) - set(properties)}")
 
-    grammars = tuple(f'"{name}":' + _gen_json(json_schema=schema, definitions=definitions) for name, schema in properties.items())
+    grammars = tuple(f'"{name}":' + _gen_json(json_schema=schema, definition_resolver=definition_resolver) for name, schema in properties.items())
     required_items = tuple(name in required for name in properties)
 
     if additional_properties is not False:
         if additional_properties is True:
             # True means that anything goes
             additional_properties = {}
-        additional_item_grammar =  _gen_json_string() + ':' + _gen_json(json_schema=additional_properties, definitions=definitions)
+        additional_item_grammar =  _gen_json_string() + ':' + _gen_json(json_schema=additional_properties, definition_resolver=definition_resolver)
         additional_items_grammar = sequence(additional_item_grammar + ',') + additional_item_grammar
         grammars += (additional_items_grammar,)
         required_items += (False,)
@@ -429,7 +429,7 @@ def _gen_json_array(
     item_schema: JSONSchema,
     min_items: int,
     max_items: Optional[int],
-    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
+    definition_resolver: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     if len(prefix_items_schema) < min_items and item_schema is False:
         raise ValueError(
@@ -454,7 +454,7 @@ def _gen_json_array(
             assert i >= min_items
             break
 
-        item = _gen_json(json_schema=schema, definitions=definitions)
+        item = _gen_json(json_schema=schema, definition_resolver=definition_resolver)
 
         if i < min_items:
             required_items.append(item)
@@ -463,7 +463,7 @@ def _gen_json_array(
 
     if max_items is None and item_schema is not False:
         # Add an infinite tail of items
-        item = _gen_json(json_schema=item_schema, definitions=definitions)
+        item = _gen_json(json_schema=item_schema, definition_resolver=definition_resolver)
         optional_items.append(item + sequence("," + item))
 
     lm += "["
@@ -498,9 +498,9 @@ def _process_anyOf(
     lm,
     *,
     anyof_list: Sequence[JSONSchema],
-    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
+    definition_resolver: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
-    options = [_gen_json(json_schema=item, definitions=definitions) for item in anyof_list]
+    options = [_gen_json(json_schema=item, definition_resolver=definition_resolver) for item in anyof_list]
     return lm + select(options)
 
 
@@ -543,7 +543,7 @@ def _gen_json_any(lm):
 def _gen_json(
     lm,
     json_schema: JSONSchema,
-    definitions: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
+    definition_resolver: Optional[Callable[[str], Callable[[], GrammarFunction]]] = None,
 ):
     if json_schema is True:
         json_schema = {}
@@ -556,26 +556,26 @@ def _gen_json(
     validate_json_node_keys(json_schema)
 
     if Keyword.ANYOF in json_schema:
-        return lm + _process_anyOf(anyof_list=json_schema[Keyword.ANYOF], definitions=definitions)
+        return lm + _process_anyOf(anyof_list=json_schema[Keyword.ANYOF], definition_resolver=definition_resolver)
 
     if Keyword.ALLOF in json_schema:
         allof_list = json_schema[Keyword.ALLOF]
         if len(allof_list) != 1:
             raise ValueError("Only support allOf with exactly one item")
-        return lm + _gen_json(allof_list[0], definitions)
+        return lm + _gen_json(allof_list[0], definition_resolver)
 
     if Keyword.ONEOF in json_schema:
         oneof_list = json_schema[Keyword.ONEOF]
         if len(oneof_list) == 1:
-            return lm + _gen_json(oneof_list[0], definitions)
+            return lm + _gen_json(oneof_list[0], definition_resolver)
         warnings.warn("oneOf not fully supported, falling back to anyOf. This may cause validation errors in some cases.")
-        return lm + _process_anyOf(anyof_list=oneof_list, definitions=definitions)
+        return lm + _process_anyOf(anyof_list=oneof_list, definition_resolver=definition_resolver)
 
     if Keyword.REF in json_schema or Keyword.DYNAMIC_REF in json_schema:
-        if definitions is None:
+        if definition_resolver is None:
             raise ValueError("Cannot resolve references without definitions")
         key = cast(str, json_schema.get(Keyword.REF) or json_schema.get(Keyword.DYNAMIC_REF))
-        grammarfunc = definitions(key)
+        grammarfunc = definition_resolver(key)
         return lm + grammarfunc()
 
     if Keyword.CONST in json_schema:
@@ -616,14 +616,14 @@ def _gen_json(
                 item_schema=json_schema.get(ArrayKeywords.ITEMS, True),
                 min_items=json_schema.get(ArrayKeywords.MIN_ITEMS, 0),
                 max_items=json_schema.get(ArrayKeywords.MAX_ITEMS, None),
-                definitions=definitions,
+                definition_resolver=definition_resolver,
             )
         elif target_type == JSONType.OBJECT:
             option = _gen_json_object(
                 properties=json_schema.get(ObjectKeywords.PROPERTIES, {}),
                 additional_properties=json_schema.get(ObjectKeywords.ADDITIONAL_PROPERTIES, True),
                 required=json_schema.get(ObjectKeywords.REQUIRED, set()),
-                definitions=definitions,
+                definition_resolver=definition_resolver,
             )
         else:
             raise ValueError(f"Unsupported type in schema: {target_type}")
@@ -715,7 +715,7 @@ def json(
     return lm + with_temperature(
         subgrammar(
             name,
-            body=_gen_json(json_schema=schema, definitions=definition_resolver),
+            body=_gen_json(json_schema=schema, definition_resolver=definition_resolver),
             skip_regex=(
                 None if compact
                 else r"[\x20\x0A\x0D\x09]+"
@@ -759,7 +759,7 @@ def resolver_factory(
 
         @guidance(stateless=True, dedent=False, cache=True)
         def closure(lm):
-            return lm + _gen_json(json_schema=resolved.contents, definitions=partial(lookup, base_uri=resolved.resolver._base_uri))
+            return lm + _gen_json(json_schema=resolved.contents, definition_resolver=partial(lookup, base_uri=resolved.resolver._base_uri))
 
         cache[full_uri] = closure
         return closure
