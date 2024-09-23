@@ -1,5 +1,6 @@
 import functools
 import inspect
+from typing import Any
 
 from ._grammar import DeferredReference, RawFunction, Terminal, string
 from ._utils import strip_multiline_string_indents
@@ -40,8 +41,16 @@ def _decorator(f, *, stateless, cache, dedent, model):
         if cache:
             f = functools.cache(f)
 
+        placeholders = {}
+        # Remove the first argument from the wrapped function
+        signature = inspect.signature(f)
+        params = list(signature.parameters.values())
+        params.pop(0)
+        signature = signature.replace(parameters=params)
+
         @functools.wraps(f)
         def wrapped(*args, **kwargs):
+            arguments = normalize_args_kwargs(signature, args, kwargs)
 
             # make a stateless grammar if we can
             if stateless is True or (
@@ -49,47 +58,57 @@ def _decorator(f, *, stateless, cache, dedent, model):
             ):
 
                 # if we have a (deferred) reference set, then we must be in a recursive definition and so we return the reference
-                reference = getattr(f, "_self_call_reference_", None)
-                if reference is not None:
-                    return reference
+                try:
+                    return placeholders[arguments]
+                except (KeyError, TypeError):
+                    pass
 
                 # otherwise we call the function to generate the grammar
+
+                # set a DeferredReference for recursive calls (only if we don't have arguments that might make caching a bad idea)
+                try:
+                    placeholders[arguments] = DeferredReference()
+                except TypeError:
+                    pass
+
+                try:
+                    # call the function to get the grammar node
+                    node = f(_null_grammar, *args, **kwargs)
+                except:
+                    raise
                 else:
-
-                    # set a DeferredReference for recursive calls (only if we don't have arguments that might make caching a bad idea)
-                    no_args = len(args) + len(kwargs) == 0
-                    if no_args:
-                        f._self_call_reference_ = DeferredReference()
-
+                    if not isinstance(node, (Terminal, str)):
+                        node.name = f.__name__
+                    # set the reference value with our generated node
                     try:
-                        # call the function to get the grammar node
-                        node = f(_null_grammar, *args, **kwargs)
-                    except:
-                        raise
+                        placeholder = placeholders[arguments]
+                    except TypeError:
+                        pass
                     else:
-                        if not isinstance(node, (Terminal, str)):
-                            node.name = f.__name__
-                        # set the reference value with our generated node
-                        if no_args:
-                            f._self_call_reference_.value = node
-                    finally:
-                        if no_args:
-                            del f._self_call_reference_
-
-                    return node
+                        placeholder.value = node
+                finally:
+                    try:
+                        del placeholders[arguments]
+                    except TypeError:
+                        pass
+                return node
 
             # otherwise must be stateful (which means we can't be inside a select() call)
             else:
                 return RawFunction(f, args, kwargs)
 
-        # Remove the first argument from the wrapped function
-        signature = inspect.signature(f)
-        params = list(signature.parameters.values())
-        params.pop(0)
-        wrapped.__signature__ = signature.replace(parameters=params)
+
+        # attach the signature to the wrapped function
+        wrapped.__signature__ = signature
 
         # attach this as a method of the model class (if given)
         # if model is not None:
         #     setattr(model, f.__name__, f)
 
         return wrapped
+
+
+def normalize_args_kwargs(signature: inspect.Signature, args, kwargs) -> tuple[tuple[str, Any], ...]:
+    bound = signature.bind(*args, **kwargs)
+    bound.apply_defaults()
+    return tuple(bound.arguments.items())
