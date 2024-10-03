@@ -1439,6 +1439,198 @@ class TestWithReferences:
                 schema_obj=schema_obj
             )
 
+class TestReferences:
+    """https://github.com/json-schema-org/JSON-Schema-Test-Suite/blob/main/tests/draft2020-12/ref.json"""
+    @pytest.mark.parametrize(
+        ["test_object", "valid"],
+        [
+            # match
+            ({"foo": False}, True),
+            # recursive match
+            ({"foo": {"foo": False}}, True),
+            # mismatch
+            ({"bar": False}, False),
+            # recursive mismatch
+            ({"foo": {"bar": False}}, False),
+        ]
+    )
+    def test_root_pointer(self, test_object, valid):
+        schema = {
+            "properties": {
+                "foo": {"$ref": "#"}
+            },
+            "additionalProperties": False,
+        }
+        if valid:
+            validate(instance=test_object, schema=schema)
+            generate_and_check(test_object, schema)
+        else:
+            with pytest.raises(ValidationError):
+                validate(instance=test_object, schema=schema)
+            check_match_failure(
+                bad_string=_to_compact_json(test_object),
+                schema_obj=schema
+            )
+
+    @pytest.mark.parametrize(
+        ["test_object", "valid"],
+        [
+            # match
+            ({"bar": 3}, True),
+            # mismatch
+            ({"bar": True}, False),
+        ]
+    )
+    def test_relative_pointer_ref_to_obj(self, test_object, valid):
+        schema = {
+            "properties": {
+                "foo": {"type": "integer"},
+                "bar": {"$ref": "#/properties/foo"}
+            },
+        }
+        if valid:
+            validate(instance=test_object, schema=schema)
+            generate_and_check(test_object, schema)
+        else:
+            with pytest.raises(ValidationError):
+                validate(instance=test_object, schema=schema)
+            check_match_failure(
+                bad_string=_to_compact_json(test_object),
+                schema_obj=schema
+            )
+
+    @pytest.mark.parametrize(
+        ["test_object", "valid"],
+        [
+            # match array
+            ([1, 2], True),
+            # mismatch array
+            ([1, "foo"], False),
+        ]
+    )
+    def test_relative_pointer_ref_to_array(self, test_object, valid):
+        schema = {
+            "prefixItems": [
+                {"type": "integer"},
+                {"$ref": "#/prefixItems/0"}
+            ],
+        }
+        if valid:
+            validate(instance=test_object, schema=schema)
+            generate_and_check(test_object, schema)
+        else:
+            with pytest.raises(ValidationError):
+                validate(instance=test_object, schema=schema)
+            check_match_failure(
+                bad_string=_to_compact_json(test_object),
+                schema_obj=schema
+            )
+
+    @pytest.mark.parametrize(
+        ["test_object", "valid"],
+        [
+            # slash invalid
+            ({"slash": "aoeu"}, False),
+            # tilde invalid
+            ({"tilde": "aoeu"}, False),
+            # percent invalid
+            ({"percent": "aoeu"}, False),
+            # slash valid
+            ({"slash": 123}, True),
+            # tilde valid
+            ({"tilde": 123}, True),
+            # percent valid
+            ({"percent": 123}, True),
+        ]
+    )
+    def test_escaped_pointer_ref(self, test_object, valid):
+        schema = {
+            "$defs": {
+                "tilde~field": {"type": "integer"},
+                "slash/field": {"type": "integer"},
+                "percent%field": {"type": "integer"},
+            },
+            "properties": {
+                "tilde": {"$ref": "#/$defs/tilde~0field"},
+                "slash": {"$ref": "#/$defs/slash~1field"},
+                "percent": {"$ref": "#/$defs/percent%25field"}
+            }
+        }
+        if valid:
+            validate(instance=test_object, schema=schema)
+            generate_and_check(test_object, schema)
+        else:
+            with pytest.raises(ValidationError):
+                validate(instance=test_object, schema=schema)
+            check_match_failure(
+                bad_string=_to_compact_json(test_object),
+                schema_obj=schema
+            )
+
+    @pytest.mark.parametrize(
+        ["test_object", "valid"],
+        [
+            # valid
+            (5, True),
+            # invalid
+            ("a", False)
+        ]
+    )
+    def test_nested_refs(self, test_object, valid):
+        schema = {
+            "$defs": {
+                "a": {"type": "integer"},
+                "b": {"$ref": "#/$defs/a"},
+                "c": {"$ref": "#/$defs/b"}
+            },
+            "$ref": "#/$defs/c"
+        }
+        if valid:
+            validate(instance=test_object, schema=schema)
+            generate_and_check(test_object, schema)
+        else:
+            with pytest.raises(ValidationError):
+                validate(instance=test_object, schema=schema)
+            check_match_failure(
+                bad_string=_to_compact_json(test_object),
+                schema_obj=schema
+            )
+
+    @pytest.mark.parametrize(
+        ["test_object", "valid"],
+        [
+            # ref valid, maxItems valid
+            ({"foo": []}, True),
+            # ref valid, maxItems invalid
+            pytest.param({"foo": [1, 2, 3]}, False, marks=pytest.mark.xfail(reason="sibling keywords not yet enforced")),
+            # ref invalid
+            ({"foo": "string"}, False),
+        ]
+    )
+    def test_ref_applies_alongside_sibling_keywords(self, test_object, valid):
+        schema = {
+            "$defs": {
+                "reffed": {"type": "array"}
+            },
+            "properties": {
+                "foo": {
+                    "$ref": "#/$defs/reffed",
+                    "maxItems": 2
+                }
+            }
+        }
+        if valid:
+            validate(instance=test_object, schema=schema)
+            generate_and_check(test_object, schema)
+        else:
+            with pytest.raises(ValidationError):
+                validate(instance=test_object, schema=schema)
+            check_match_failure(
+                bad_string=_to_compact_json(test_object),
+                schema_obj=schema
+            )
+
+
 
 class TestAnyOf:
     @pytest.mark.parametrize("target_obj", [123, True])
