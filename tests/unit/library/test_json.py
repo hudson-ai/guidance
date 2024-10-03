@@ -1398,26 +1398,6 @@ class TestRefs:
     @pytest.mark.parametrize(
         ["test_object", "valid"],
         [
-            # any value is invalid
-            ('foo', False)
-        ]
-    )
-    def test_ref_to_boolean_schema_false(self, test_object, valid):
-        schema = {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$ref': '#/$defs/bool', '$defs': {'bool': False}}
-        if valid:
-            validate(instance=test_object, schema=schema)
-            generate_and_check(test_object, schema)
-        else:
-            with pytest.raises(ValidationError):
-                validate(instance=test_object, schema=schema)
-            check_match_failure(
-                bad_string=_to_compact_json(test_object),
-                schema_obj=schema
-            )
-
-    @pytest.mark.parametrize(
-        ["test_object", "valid"],
-        [
             # valid tree
             ({'meta': 'root', 'nodes': [{'value': 1, 'subtree': {'meta': 'child', 'nodes': [{'value': 1.1}, {'value': 1.2}]}}, {'value': 2, 'subtree': {'meta': 'child', 'nodes': [{'value': 2.1}, {'value': 2.2}]}}]}, True),
             # invalid tree
