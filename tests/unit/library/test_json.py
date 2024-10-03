@@ -2483,26 +2483,3 @@ class TestBooleanSchema:
         with pytest.raises(ValueError) as ve:
             gen_json(schema=schema_obj)
         assert ve.value.args[0] == "No valid JSON can be generated from a schema of `False`"
-
-def fetch_test_cases():
-    import requests
-    test_json = requests.get("https://raw.githubusercontent.com/json-schema-org/JSON-Schema-Test-Suite/main/tests/draft2020-12/dynamicRef.json").json()
-    cases = []
-    for case in test_json:
-        schema = case["schema"]
-        for test in case["tests"]:
-            target_obj = test["data"]
-            valid = test["valid"]
-            cases.append((schema, target_obj, valid))
-    return cases
-
-@pytest.mark.parametrize("schema, target_obj, valid", fetch_test_cases())
-def test_dynamic_refs(schema, target_obj, valid):
-    if valid:
-        generate_and_check(target_obj, schema)
-    else:
-        check_match_failure(
-            bad_string=_to_compact_json(target_obj),
-            schema_obj=schema,
-            compact=True
-        )

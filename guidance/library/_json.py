@@ -141,9 +141,7 @@ class Keyword(str, Enum):
     ALLOF = "allOf" # Note: Partial support. Only supports exactly one item.
     ONEOF = "oneOf" # Note: Partial support. This is converted to anyOf.
     REF = "$ref"
-    DYNAMIC_REF = "$dynamicRef"
     ANCHOR = "$anchor"
-    DYNAMIC_ANCHOR = "$dynamicAnchor"
     CONST = "const"
     ENUM = "enum"
     TYPE = "type"
@@ -692,10 +690,10 @@ def _gen_json(
         warnings.warn("oneOf not fully supported, falling back to anyOf. This may cause validation errors in some cases.")
         return lm + _process_anyOf(anyof_list=oneof_list, definition_resolver=definition_resolver)
 
-    if Keyword.REF in json_schema or Keyword.DYNAMIC_REF in json_schema:
+    if Keyword.REF in json_schema:
         if definition_resolver is None:
             raise ValueError("Cannot resolve references without definitions")
-        key = cast(str, json_schema.get(Keyword.REF) or json_schema.get(Keyword.DYNAMIC_REF))
+        key = cast(str, json_schema.get(Keyword.REF))
         grammarfunc = definition_resolver(key)
         return lm + grammarfunc()
 
