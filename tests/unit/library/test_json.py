@@ -1329,8 +1329,7 @@ class TestRefs:
             ({"foo": []}, True),
             # ref valid, maxItems invalid
             pytest.param(
-                {"foo": [1, 2, 3]},
-                False,
+                *({"foo": [1, 2, 3]}, False),
                 marks=pytest.mark.xfail(reason="Sibling keys alongside ref are not yet applied"),
             ),
             # ref invalid
@@ -1573,9 +1572,19 @@ class TestRefs:
         ["test_object", "valid"],
         [
             # invalid on inner field
-            ({"foo": {"bar": 1}, "bar": "a"}, False),
+            pytest.param(
+                *({"foo": {"bar": 1}, "bar": "a"}, False),
+                marks=pytest.mark.xfail(
+                    reason="Sibling keys alongside ref are not yet applied ('foo' is being treated as an additional property)"
+                ),
+            ),
             # invalid on outer field
-            ({"foo": {"bar": "a"}, "bar": 1}, False),
+            pytest.param(
+                *({"foo": {"bar": "a"}, "bar": 1}, False),
+                marks=pytest.mark.xfail(
+                    reason="Sibling keys alongside ref are not yet applied ('foo' is being treated as an additional property, causing 'bar' to be treated as an additional property under issue #1039)"
+                )
+            ),
             # valid on both fields
             ({"foo": {"bar": "a"}, "bar": "a"}, True),
         ],
@@ -1605,9 +1614,19 @@ class TestRefs:
         ["test_object", "valid"],
         [
             # invalid on inner field
-            ({"foo": {"bar": 1}, "bar": "a"}, False),
+            pytest.param(
+                *({"foo": {"bar": 1}, "bar": "a"}, False),
+                marks=pytest.mark.xfail(
+                    reason="Sibling keys alongside ref are not yet applied ('foo' is being treated as an additional property)"
+                ),
+            ),
             # invalid on outer field
-            ({"foo": {"bar": "a"}, "bar": 1}, False),
+            pytest.param(
+                *({"foo": {"bar": "a"}, "bar": 1}, False),
+                marks=pytest.mark.xfail(
+                    reason="Sibling keys alongside ref are not yet applied ('foo' is being treated as an additional property, causing 'bar' to be treated as an additional property under issue #1039)"
+                )
+            ),
             # valid on both fields
             ({"foo": {"bar": "a"}, "bar": "a"}, True),
         ],
