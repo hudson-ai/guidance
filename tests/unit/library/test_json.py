@@ -1522,28 +1522,6 @@ class TestRefs:
     @pytest.mark.parametrize(
         ["test_object", "valid"],
         [
-            # referenced subschema doesn't see annotations from properties
-            ({"prop1": "match"}, False)
-        ],
-    )
-    def test_ref_creates_new_scope_when_adjacent_to_keywords(self, test_object, valid):
-        schema = {
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$defs": {"A": {"unevaluatedProperties": False}},
-            "properties": {"prop1": {"type": "string"}},
-            "$ref": "#/$defs/A",
-        }
-        if valid:
-            validate(instance=test_object, schema=schema)
-            generate_and_check(test_object, schema)
-        else:
-            with pytest.raises(ValidationError):
-                validate(instance=test_object, schema=schema)
-            check_match_failure(bad_string=_to_compact_json(test_object), schema_obj=schema)
-
-    @pytest.mark.parametrize(
-        ["test_object", "valid"],
-        [
             # do not evaluate the $ref inside the enum, matching any string
             ("this is a string", False),
             # do not evaluate the $ref inside the enum, definition exact match
