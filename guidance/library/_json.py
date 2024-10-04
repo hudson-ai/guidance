@@ -499,7 +499,8 @@ def _gen_json_object(
         # where we will validate against the additional_properties schema
         *((key, additional_properties) for key in required if key not in properties),
     ]
-    grammars = tuple(f'"{name}":' + _gen_json(json_schema=schema, definition_resolver=definition_resolver) for name, schema in items)
+    # json_dumps name to escape any quotes (and wrap in quotes).
+    grammars = tuple(f'{json_dumps(name)}:' + _gen_json(json_schema=schema, definition_resolver=definition_resolver) for name, schema in items)
     required_items = tuple(name in required for name, _ in items)
 
     if additional_properties is not False:
