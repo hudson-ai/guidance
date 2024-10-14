@@ -22,6 +22,35 @@ class StatefulException(Exception):
 
     pass
 
+class Accumulator:
+    """Immutable container that represents a queue of work to be done by a model.
+    Work objects are Functions, of both the Raw and Grammar varieties.
+    """
+    __slots__ = "values"
+
+    def __init__(self, values: Sequence["Function"] = ()):
+        self.values = tuple(values)
+
+    def __add__(self, other: Union["Accumulator", "Function", str]):
+        if not isinstance(other, (Accumulator, Function, str)):
+            return NotImplemented
+        if isinstance(other, Accumulator):
+            return Accumulator(self.values + other.values)
+        if isinstance(other, str):
+            other = string(other)
+        return Accumulator(self.values + (other,))
+
+    def __radd__(self, other: Union["Function", str]):
+        if not isinstance(other, (Function, str)):
+            return NotImplemented
+        if isinstance(other, str):
+            other = string(other)
+        return Accumulator((other,) + self.values)
+
+    def __str__(self):
+        """Creates a string tag that can be used to retrieve this object."""
+        raise NotImplementedError("__str__ for f-string support of accumulators is not yet implemented")
+
 
 class Function:
     """This is the abstract class representing all guidance functions.
@@ -58,40 +87,15 @@ class RawFunction(Function):
     def __call__(self, model):
         return self.f(model, *self.args, **self.kwargs)
 
-    def __add__(self, other):
+    def __add__(self, other: Union["Function", str]) -> Accumulator:
+        if not isinstance(other, (Function, str)):
+            return NotImplemented
+        return Accumulator((self,)) + other
 
-        # if we are joining with a string we use the string representation for ourselves
-        if isinstance(other, str):
-            return str(self) + other
-
-        def __add__(model):
-            model = self(model)
-            if model is None:
-                raise Exception(
-                    f"The guidance function `{self.f.__name__}` did not return a model object! You need to return an updated model object at the end of your guidance function."
-                )
-            if isinstance(other, GrammarFunction):
-                return model + other
-            else:
-                return other(model)
-
-        return RawFunction(__add__, [], {})
-
-    def __radd__(self, other):
-
-        # if we are joining with a string we use the string representation for ourselves
-        if isinstance(other, str):
-            return other + str(self)
-
-        def __radd__(model):
-            if isinstance(other, GrammarFunction):
-                model += other
-            else:
-                model = other(model)
-            return self(model)
-
-        return RawFunction(__radd__, [], {})
-
+    def __radd__(self, other: Union["Function", str]) -> Accumulator:
+        if not isinstance(other, (Function, str)):
+            return NotImplemented
+        return other + Accumulator((self,))
 
 class Match:
     def __init__(self, captures, log_probs, partial):
