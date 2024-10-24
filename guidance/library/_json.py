@@ -420,7 +420,7 @@ class GenJson:
             uri=self._base_uri,
             resource=resource
         )
-        self._resolver = registry.resolver()
+        self._resolver = registry.resolver_with_root(resource)
         self._defs: dict[str, Callable[[], GrammarFunction]] = {}
 
 
