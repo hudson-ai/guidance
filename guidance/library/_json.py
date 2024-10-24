@@ -130,6 +130,7 @@ class Keyword(str, Enum):
     ALLOF = "allOf" # Note: Partial support. Only supports exactly one item.
     ONEOF = "oneOf" # Note: Partial support. This is converted to anyOf.
     REF = "$ref"
+    DYNAMIC_REF = "$dynamicRef"
     CONST = "const"
     ENUM = "enum"
     TYPE = "type"
@@ -168,6 +169,7 @@ TYPE_SPECIFIC_KEYWORDS = {
 IGNORED_KEYS = {
     "$anchor",
     "$defs",
+    "$dynamicAnchor",
     "$schema",
     "$id",
     "id",
@@ -857,11 +859,14 @@ class GenJson:
             warnings.warn("oneOf not fully supported, falling back to anyOf. This may cause validation errors in some cases.")
             return lm + self.anyOf(anyof_list=oneof_list)
 
-        if Keyword.REF in json_schema:
-            sibling_keys = get_sibling_keys(json_schema, Keyword.REF)
+        if (ref_keys := {Keyword.REF, Keyword.DYNAMIC_REF} & set(json_schema)):
+            if len(ref_keys) > 1:
+                raise ValueError(f"Multiple reference keys found: {ref_keys}")
+            ref_key = ref_keys.pop()
+            sibling_keys = get_sibling_keys(json_schema, ref_key)
             if sibling_keys:
-                raise NotImplementedError(f"$ref with sibling keys is not yet supported. Got {sibling_keys}")
-            return lm + self.ref(reference=json_schema[Keyword.REF])
+                raise NotImplementedError(f"{ref_key} with sibling keys is not yet supported. Got {sibling_keys}")
+            return lm + self.ref(reference=json_schema[ref_key])
 
         if Keyword.CONST in json_schema:
             sibling_keys = get_sibling_keys(json_schema, Keyword.CONST) - {Keyword.TYPE, Keyword.ENUM}
