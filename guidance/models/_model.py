@@ -390,11 +390,35 @@ class Engine:
         has_get_logits = True
         engine_output = None
         logits_lat_ms = 0
+        tokens: list[int] = []
         while not parser.done():
             t0 = time.time()
 
             token_id = None if engine_output is None else engine_output.issued_token.token_id
-            tokens, mask_fut, backtrack = parser.advance(token_id)
+            # TODO: this should be empty or have at most one element; should be Optional[GenToken] instead of list[GenToken]?
+            if engine_output is not None:
+                backtrack, ff_tokens, mask_fut = parser.advance(engine_output.issued_token.token_id)
+                if ff_tokens[:1] == [token_id]:
+                    tokens.append(ff_tokens.pop(0))
+                    # TODO: this should be equal to engine_output.issued_token.text (which should be bytes, not str?)
+                    generated_bytes = self.tokenizer.decode([token_id])
+                    assert backtrack == 0
+                    # backtracked_bytes = b""
+                else:
+                    engine_output.is_backtracked = True
+                    generated_bytes = b""
+                    # TODO: these may be useful for something?
+                    # backtracked_bytes = self.tokenizer.decode(tokens[-backtrack:])
+                    tokens = tokens[:-backtrack]
+            else:
+                # TODO: should first ff_tokens be handled any differently? E.g. as input (well, plus some bona fide ff tokens...)
+                backtrack, ff_tokens, mask_fut = parser.advance(None)
+                assert backtrack == 0
+                generated_bytes = b""
+                # backtracked_bytes = b""
+
+            ff_bytes = self.tokenizer.decode(ff_tokens)
+            tokens += ff_tokens
 
             # Note that has_pending_stop implies that the response is a stop response,
             # but the converse is not true. We can therefore avoid some (but not all)
@@ -420,60 +444,25 @@ class Engine:
 
             engine_response = ll_response.progress.to_engine_call_response()
             engine_response.backtrack = backtrack
+            # engine_response.latency_ms = ... # TODO
             if engine_output:
+                # TODO: there should be 0 or 1 element in response_gen_tokens, so it should be Optional[EngineOutput] instead of list[EngineOutput]
                 engine_response.engine_outputs.append(engine_output)
-
-            # NOTE (loc): Temporary solution to quickly check which segments are generated and which are force-forwarded to animate visualizations on the UI
-            # These tokens in chunk will not be used for final visualization
-            # TODO: This should be handled by the interpreter
-            if engine_response.new_bytes:
-                _tokens = parser.tokenizer.encode(engine_response.new_bytes)
-
-                ff_token_start_idx = 1
-                if engine_output is None:
-                    ff_token_start_idx = 0
-                elif engine_output.issued_token.token_id == _tokens[0]:
-                    # this is generated
-                    engine_response.generated_bytes = parser.tokenizer.decode([_tokens[0]])
-                    engine_output.issued_token.is_generated = True
-                    engine_response.generated_tokens.append(engine_output.issued_token)
-                else:
-                    # check if the first byte contains the generated token
-                    generated = parser.tokenizer.decode(
-                        [engine_output.issued_token.token_id]
-                    ).decode("utf-8")
-                    force_forwarded = parser.tokenizer.decode([_tokens[0]]).decode("utf-8")
-
-                    if force_forwarded.startswith(generated):
-                        # this is marked as generated
-                        # Example: engine generates token "pl" and parser decides to backtrack and generate a new token "plate"
-                        engine_response.generated_bytes = parser.tokenizer.decode([_tokens[0]])
-                        engine_response.generated_tokens.append(
-                            GenToken(
-                                token_id=_tokens[0],
-                                prob=1.0,
-                                text=engine_response.generated_bytes.decode("utf-8"),
-                                latency_ms=engine_output.issued_token.latency_ms,
-                                is_generated=True,
-                            )
-                        )
-                    else:
-                        ff_token_start_idx = 0
-
-                if len(_tokens[ff_token_start_idx:]):
-                    engine_response.force_forwarded_bytes = parser.tokenizer.decode(
-                        _tokens[ff_token_start_idx:]
+                # TODO: same as above. Also, redundant
+                engine_response.generated_tokens.append(engine_output.issued_token)
+            engine_response.generated_bytes = generated_bytes
+            engine_response.force_forwarded_bytes = ff_bytes
+            for ff_token in ff_tokens:
+                engine_response.force_forwarded_tokens.append(
+                    GenToken(
+                        token_id=ff_token,
+                        prob=1.0,
+                        # TODO: this should be bytes, not str?
+                        text=self.tokenizer.decode([ff_token]).decode("utf-8"),
+                        latency_ms=0,
+                        is_force_forwarded=True,
                     )
-                    for _token in _tokens[ff_token_start_idx:]:
-                        engine_response.force_forwarded_tokens.append(
-                            GenToken(
-                                token_id=_token,
-                                prob=1.0,
-                                text=parser.tokenizer.decode([_token]).decode("utf-8"),
-                                latency_ms=0,
-                                is_force_forwarded=True,
-                            )
-                        )
+                )
 
             # process engine_response
             yield engine_response
