@@ -364,40 +364,9 @@ class Engine:
     def reset_metrics(self):
         self.metrics = GuidanceEngineMetrics()
 
-    def start(self, prompt, grammar, ensure_bos_token=True) -> TokenParser:
-        # def __call__(self, grammar, max_tokens=1000000, n=1, top_p=1, temperature=0.0, ensure_bos_token=True):
-        # assert n == 1, "Still need to add support for n > 1!"
-
-        # TODO: re-enable this? llguidance currently doesn't support model variables
-        # note we only support a fixed set of engine variables for the sake of security
-        # self._replacements = replace_model_variables(
-        #     grammar, self, allowed_vars=["eos_token", "bos_token"]
-        # )
-
-        # right now we only support a text/bytes prompt parser state, so we extract that
-        if isinstance(prompt, bytes):
-            prompt = prompt
-        elif isinstance(prompt, str):
-            prompt = bytes(prompt, encoding="utf8")
-        elif isinstance(prompt, TokenParser):
-            raise NotImplementedError(
-                "Still need to implement support for extending a full Parser trace."
-            )
-        else:
-            raise Exception("The passed prompt is of an unknown type!")
-
-        return TokenParser(
-            grammar=grammar,
-            tokenizer=self.tokenizer,
-            prompt=prompt,
-            ensure_bos_token=ensure_bos_token,
-            enable_backtrack=self.enable_backtrack,
-            enable_ff_tokens=self.enable_ff_tokens,
-        )
-
     def __call__(
             self, 
-            prompt: Union[str, TokenParser], 
+            prompt: Union[bytes, str, TokenParser], 
             grammar: Function,
             ensure_bos_token: bool = True,
             echo: bool = True,
@@ -418,17 +387,48 @@ class Engine:
         ensure_bos_token: bool
             Ensures that the prompt ends with the BOS token.
         """
-        parser = self.start(prompt, grammar, ensure_bos_token)
+        if isinstance(prompt, TokenParser):
+            raise NotImplementedError("Still need to implement support for extending a full Parser trace.")
+        elif isinstance(prompt, str):
+            prompt = bytes(prompt, encoding="utf8")
+
+        tokens = self.tokenizer.encode(prompt)
+        if ensure_bos_token and self.tokenizer.bos_token_id is not None and tokens[:1] != [self.tokenizer.bos_token_id]:
+            tokens = [self.tokenizer.bos_token_id] + tokens
+
+        parser = TokenParser(
+            grammar=grammar,
+            tokenizer=self.tokenizer,
+            prompt=tokens,
+            enable_backtrack=self.enable_backtrack,
+            enable_ff_tokens=self.enable_ff_tokens,
+        )
+
+        # TODO: Put these elsewhere
+        def is_special_token(token_id: int) -> bool:
+            return token_id in [self.tokenizer.bos_token_id, self.tokenizer.eos_token_id]
+        def decode_strip_special(tokens: list[int]) -> str:
+            return self.tokenizer.decode([tok for tok in tokens if not is_special_token(tok)])
 
         has_get_logits = True
         engine_output = None
         logits_lat_ms = 0
-        delayed_bytes = b""
-        delayed_engine_outputs: list[EngineOutput] = []
         while not parser.done():
             t0 = time.time()
 
-            tokens, mask_fut, backtrack = parser.advance(engine_output)
+            (backtrack, ff_tokens), mask_fut = parser.advance(engine_output)
+            new_bytes = decode_strip_special(ff_tokens)
+            if backtrack:
+                tokens, backtracked_tokens = tokens[:-backtrack], tokens[-backtrack:]
+                backtracked_bytes = decode_strip_special(backtracked_tokens)
+                if len(backtracked_bytes) > len(new_bytes):
+                    assert backtracked_bytes.endswith(new_bytes)
+                    # TODO: we have to actually backtrack the model here
+                    # This is the cause of the tool-call failures I just introduced
+                else:
+                    assert new_bytes.startswith(backtracked_bytes)
+                new_bytes = new_bytes[len(backtracked_bytes):]
+            tokens += ff_tokens
 
             # Note that has_pending_stop implies that the response is a stop response,
             # but the converse is not true. We can therefore avoid some (but not all)
@@ -452,99 +452,47 @@ class Engine:
             # this allows the mask to be built concurrently with model inference
             mask, ll_response = mask_fut.result()
 
-            engine_response = ll_response.progress.to_engine_call_response()
-            engine_response.backtrack = backtrack
-            if engine_output:
-                engine_response.engine_outputs.append(engine_output)
+            # Discarding most of the data -- only using capture groups now (TODO: refactor)
+            legacy_engine_response: EngineCallResponse = ll_response.progress.to_engine_call_response()
 
-            # NOTE (loc): Temporary solution to quickly check which segments are generated and which are force-forwarded to animate visualizations on the UI
-            # These tokens in chunk will not be used for final visualization
-            # TODO: This should be handled by the interpreter
-            if echo and engine_response.new_bytes:
-                try:
-                    _new_bytes = delayed_bytes + engine_response.new_bytes
-                    _tokens = parser.tokenizer.encode(_new_bytes)
-                    delayed_bytes = b""
-                except UnicodeDecodeError:
-                    # similar to what we did in _run_stateless function, if we could not decode current bytes
-                    # we will delay until we can decode them
-                    delayed_bytes += engine_response.new_bytes
-                    if engine_output:
-                        engine_response.engine_outputs.pop()
-                        delayed_engine_outputs.append(engine_output)
 
-                if not delayed_bytes:
-                    ff_token_start_idx = 1
-                    if engine_output is None and len(delayed_engine_outputs) == 0:
-                        ff_token_start_idx = 0
-                    elif engine_output.issued_token.token_id == _tokens[0] and len(delayed_engine_outputs) == 0:
-                        # this is generated
-                        engine_response.generated_bytes = parser.tokenizer.decode([_tokens[0]])
-                        engine_output.issued_token.is_generated = True
-                        engine_response.generated_tokens.append(engine_output.issued_token)
-                    else:
-                        # handle delayed bytes
-                        engine_outputs = delayed_engine_outputs + [engine_output] if engine_output else []
-                        engine_output_tokens = [e.issued_token.token_id for e in engine_outputs]
-
-                        generated = to_utf8_or_bytes_string(parser.tokenizer.decode(engine_output_tokens))
-                        force_forwarded = _new_bytes.decode("utf-8")
-
-                        if force_forwarded.startswith(generated):
-                            engine_output_tokens = np.array(engine_output_tokens)
-                            ff_tokens = np.array(_tokens)
-
-                            # check if engine_output_tokens in ff_tokens
-                            _idx = -1
-                            for _i in range(0, len(ff_tokens) - len(engine_output_tokens) + 1):
-                                if np.array_equal(engine_output_tokens, ff_tokens[_i:_i+len(engine_output_tokens)]):
-                                    _idx = _i + len(engine_output_tokens)
-                                    break
-
-                            if _idx < 0:
-                                ff_token_start_idx = 0
-                            else:
-                                # all previous tokens before _idx are generated
-                                engine_response.generated_bytes = parser.tokenizer.decode(ff_tokens[:_idx])
-                                idx_in_engine_output_tokens = 0
-                                for _i in range(_idx):
-                                    matching_engine_output = None
-                                    if _tokens[_i] == engine_output_tokens[idx_in_engine_output_tokens]:
-                                        matching_engine_output = engine_outputs[idx_in_engine_output_tokens]
-                                        idx_in_engine_output_tokens += 1
-                                    engine_response.generated_tokens.append(
-                                        GenToken(
-                                            token_id=_tokens[_i],
-                                            prob=1.0 if not matching_engine_output else matching_engine_output.issued_token.prob,
-                                            text=parser.tokenizer.decode([_tokens[_i]]) if not matching_engine_output else matching_engine_output.issued_token.text,
-                                            latency_ms=0.0 if not matching_engine_output else matching_engine_output.issued_token.latency_ms,
-                                            is_generated=True,
-                                        )
-                                    )
-                                ff_token_start_idx = _idx
-                        else:
-                            ff_token_start_idx = 0
-
-                    if len(_tokens[ff_token_start_idx:]):
-                        engine_response.force_forwarded_bytes = parser.tokenizer.decode(
-                            _tokens[ff_token_start_idx:]
-                        )
-                        for _token in _tokens[ff_token_start_idx:]:
-                            engine_response.force_forwarded_tokens.append(
-                                GenToken(
-                                    token_id=_token,
-                                    prob=1.0,
-                                    text=to_utf8_or_bytes_string(parser.tokenizer.decode([_token])),
-                                    latency_ms=0,
-                                    is_force_forwarded=True,
-                                )
-                            )
-
-                    delayed_engine_outputs = []
-            elif not echo and engine_response.new_bytes:
-                # do not collect tokens-metrics if echo is disabled
-                engine_response.generated_bytes = engine_response.new_bytes
-                engine_response.generated_tokens.clear()
+            generated_bytes = b""
+            if engine_output is not None:
+                if [engine_output.issued_token.token_id] == ff_tokens[:1]:
+                    ff_tokens = ff_tokens[1:]
+                    generated_bytes = decode_strip_special([engine_output.issued_token.token_id])
+                else:
+                    engine_output.is_backtracked = True
+            
+            force_forwarded_tokens = []
+            ff_latency_ms = (time.time() - t0) * 1000 - logits_lat_ms # Something like this?
+            for token_id in ff_tokens:
+                force_forwarded_tokens.append(
+                    GenToken(
+                        token_id=token_id,
+                        prob=1.0,
+                        text=to_utf8_or_bytes_string(self.tokenizer.decode([token_id])),
+                        # could subtract generated_token.latency_ms from engine_response.latency_ms and divide by len(ff_tokens) 
+                        latency_ms=ff_latency_ms / len(ff_tokens),
+                        is_force_forwarded=(engine_output is not None),
+                        is_input=(engine_output is None), # first iteration only
+                    )
+                )
+            engine_response = EngineCallResponse(
+                new_bytes = new_bytes, # Redundant with generated_bytes and force_forwarded_bytes
+                is_generated = engine_output is not None,
+                new_bytes_prob = 0.0, # I think this is discarded everywhere
+                capture_groups = legacy_engine_response.capture_groups,
+                capture_group_log_probs = legacy_engine_response.capture_group_log_probs,
+                new_token_count = len(ff_tokens) + (1 if engine_output is not None else 0), # Redundant with generated_tokens and force_forwarded_tokens
+                backtrack = backtrack,
+                latency_ms = int(engine_output.issued_token.latency_ms + ff_latency_ms if engine_output is not None else ff_latency_ms), # Something like this?
+                engine_outputs = [engine_output] if engine_output is not None else [], # Can this just be an Optional[EngineOutput]?
+                generated_bytes = generated_bytes,
+                generated_tokens = [engine_output.issued_token] if engine_output is not None else [], # Redundant with engine_output
+                force_forwarded_bytes = new_bytes[len(generated_bytes):],
+                force_forwarded_tokens = force_forwarded_tokens,
+            )
 
             # process engine_response
             # NOTE (loc): We should not yield the engine_response if new_bytes are invalid utf-8 bytes
