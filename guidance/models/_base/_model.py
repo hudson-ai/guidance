@@ -289,8 +289,7 @@ class Model:
             func = new_self._pending
             new_self._pending = None
             if isinstance(func, AsyncFunction):
-                # TODO: share a bg thread
-                new_self = run_async_maybe_in_thread(func(new_self))
+                new_self = run_async_coroutine(func(new_self))
             else:
                 new_self = func(new_self)
         self.__dict__ = new_self.__dict__ # I guess
@@ -299,7 +298,7 @@ class Model:
         assert isinstance(self._pending, ASTNode)
         node = self._pending
         self._pending = None
-        run_async_maybe_in_thread(self._run_node(node))
+        run_async_coroutine(self._run_node(node))
 
     async def _run_node(self, node: ASTNode) -> None:
         async for output_attr in self._interpreter.run(node):
@@ -408,42 +407,16 @@ class ModelStream:
         # Reset the event queues context variable
         _event_queues.reset(token)
 
-def run_async_maybe_in_thread(
-    coro
-):
-    """
-    Run a coroutine in a thread if not already in an async context.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # Not in an async context, run the coroutine in a thread
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
-    else:
-        warnings.warn(
-            "Synchronous access to model state from an async context is ill-advised...",
-            stacklevel=2
+
+def run_async_coroutine(coro):
+    from ...registry import get_bg_async
+    import threading
+
+    bg_async = get_bg_async()
+    bg_thread, _ = bg_async._thread_and_loop()
+    if threading.current_thread() is bg_thread:
+        raise RuntimeError(
+            "Cannot run async function in the same thread as the event loop."
         )
-        # We're already in an async loop, so we have to run the coroutine in a nested event loop.
-        # TODO: consider raising an exception (sync guidance function called in async context)
-        # TODO: consider using some global thread and call asyncio.run_coroutine_threadsafe
-        result = None
-        exception = None
-        event = threading.Event()
-        def run():
-            nonlocal result, exception
-            try:
-                result = asyncio.run(coro)
-            except Exception as ex:
-                exception = ex
-            finally:
-                event.set()
-        thread = threading.Thread(target=run)
-        thread.start()
-        event.wait()
-        thread.join()
-        if exception is not None:
-            raise exception
-        return result
+    future = bg_async.run_async_coroutine(coro)
+    return future.result()
