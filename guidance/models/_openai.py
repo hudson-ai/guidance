@@ -281,6 +281,8 @@ class OpenAIInterpreter(Interpreter[OpenAIState]):
                 self.state.usage.completion_tokens += chunk.usage.completion_tokens
                 self.state.usage.prompt_tokens += chunk.usage.prompt_tokens
                 self.state.usage.prompt_tokens_details.cached_tokens += (chunk.usage.prompt_tokens_details.cached_tokens or 0)
+
+            if stopped:
                 break
 
             t1 = time.time()
