@@ -1,18 +1,44 @@
 from abc import ABC, abstractmethod
 from typing import Optional, TypedDict, Union
+from pydantic import BaseModel, Field
 
 from ...trace import CaptureOutput
-
 
 class CaptureVar(TypedDict):
     value: str
     log_prob: Optional[float]
 
+class UsageMetrics(BaseModel):
+    completion_tokens: int = 0
+    prompt_tokens: int = 0
+
+    completion_tokens_details: "CompletionTokensDetails" = Field(
+        default_factory=lambda: CompletionTokensDetails()
+    )
+    prompt_tokens_details: "PromptTokensDetails" = Field(
+        default_factory=lambda: PromptTokensDetails()
+    )
+
+class CompletionTokensDetails(BaseModel):
+    fast_forward_tokens: int = 0
+
+    def __add__(self, other: "CompletionTokensDetails") -> "CompletionTokensDetails":
+        return CompletionTokensDetails(
+            fast_forward_tokens=self.fast_forward_tokens + other.fast_forward_tokens
+        )
+class PromptTokensDetails(BaseModel):
+    cached_tokens: int = 0
+
+    def __add__(self, other: "PromptTokensDetails") -> "PromptTokensDetails":
+        return PromptTokensDetails(
+            cached_tokens=self.cached_tokens + other.cached_tokens
+        )
 
 class State(ABC):
     def __init__(self) -> None:
         self.captures: dict[str, Union[CaptureVar, list[CaptureVar]]] = {}
         self.active_role: Optional[str] = None
+        self.usage: UsageMetrics = UsageMetrics()
 
     @abstractmethod
     def __str__(self) -> str:

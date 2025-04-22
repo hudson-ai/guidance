@@ -264,6 +264,7 @@ class OpenAIInterpreter(Interpreter[OpenAIState]):
             messages=TypeAdapter(list[Message]).dump_python(self.state.messages),  # type: ignore[arg-type]
             logprobs=self.log_probs,
             stream=True,
+            stream_options = dict(include_usage = True),
             **kwargs,
         ) as chunks:
             yield from self._handle_stream(chunks)
@@ -271,9 +272,17 @@ class OpenAIInterpreter(Interpreter[OpenAIState]):
     def _handle_stream(
         self, chunks: Iterator["ChatCompletionChunk"]
     ) -> Iterator[OutputAttr]:
+        stopped = False
         audio: Optional[AssistantAudio] = None
         t0 = time.time()
         for chunk in chunks:
+            if chunk.usage is not None:
+                assert stopped
+                self.state.usage.completion_tokens += chunk.usage.completion_tokens
+                self.state.usage.prompt_tokens += chunk.usage.prompt_tokens
+                self.state.usage.prompt_tokens_details.cached_tokens += (chunk.usage.prompt_tokens_details.cached_tokens or 0)
+                break
+
             t1 = time.time()
             latency_ms = (t1 - t0) * 1000
             t0 = t1
@@ -345,7 +354,11 @@ class OpenAIInterpreter(Interpreter[OpenAIState]):
                 raise ValueError(f"OpenAI refused the request: {delta.refusal}")
 
             if choice.finish_reason is not None:
-                break
+                stopped = True
+                if choice.finish_reason != "stop":
+                    raise ValueError(
+                        f"OpenAI finished with reason {choice.finish_reason} (not stop). This is unexpected."
+                    )
 
         if audio is not None:
             assert self.state.audio is None
