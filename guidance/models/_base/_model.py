@@ -272,6 +272,8 @@ class Model:
             else:
                 # TODO: maybe run in thread to avoid blocking?
                 new_self = func(new_self)
+            # may be some pending blocks
+            new_self._apply_blocks()
         self.__dict__ = new_self.__dict__ # I guess
         if self._pending is None:
             return
@@ -292,6 +294,8 @@ class Model:
                 new_self = run_async_coroutine(func(new_self))
             else:
                 new_self = func(new_self)
+            # may be some pending blocks
+            new_self._apply_blocks()
         self.__dict__ = new_self.__dict__ # I guess
         if self._pending is None:
             return
