@@ -23,12 +23,12 @@ from .trace import InputAttr, OutputAttr, RoleOpenerInput, RoleCloserInput
 NodeAttr = Union[InputAttr, OutputAttr]
 
 if TYPE_CHECKING:
-    from .models._base import Interpreter, State
+    from .models._base import Interpreter, State, Model
 
 # to support the embedding of guidance functions inside Python f-strings we use tags with these delimiters
 tag_start = "{{G|"  # start of a call tag
 tag_end = "|G}}"  # end of a call tag
-_tag_pool: dict[str, Union["Function", "GrammarNode"]] = (
+_tag_pool: dict[str, Union["ASTNode", "Function", "AsyncFunction"]] = (
     {}
 )  # the Functions or GrammarNodes associated with the tags
 _tag_pattern = re.compile(
@@ -36,7 +36,7 @@ _tag_pattern = re.compile(
 )  # the pattern for matching call tags
 
 
-def _parse_tags(s: str) -> Union["GrammarNode", "Function"]:
+def _parse_tags(s: str) -> Union["ASTNode", "Function", "AsyncFunction"]:
     parts = cast(list[str], _tag_pattern.split(s))
     obj: GrammarNode = LiteralNode(parts.pop(0))
     is_tag = True
@@ -110,7 +110,7 @@ class Function(Tagged):
     def __post_init__(self):
         self.name = self.f.__name__
 
-    def __call__(self, model):
+    def __call__(self, model: "Model") -> "Model":
         model = self.f(model, *self.args, **self.kwargs)
         if model is None:
             raise Exception(
@@ -158,7 +158,7 @@ class AsyncFunction(Tagged):
     def __post_init__(self):
         self.name = self.f.__name__
 
-    async def __call__(self, model):
+    async def __call__(self, model: "Model") -> "Model":
         model = await self.f(model, *self.args, **self.kwargs)
         if model is None:
             raise Exception(
@@ -199,7 +199,7 @@ class AsyncFunction(Tagged):
 
 S = TypeVar("S", bound="State")
 
-class ASTNode(ABC):
+class ASTNode(Tagged, ABC):
     @abstractmethod
     def _run(self, interpreter: "Interpreter[S]", **kwargs) -> AsyncIterable[NodeAttr]:
         pass
@@ -331,7 +331,7 @@ class GenAudio(ASTNode):
 
 
 @dataclass(frozen=True)
-class GrammarNode(Tagged, ASTNode):
+class GrammarNode(ASTNode):
 
     @property
     def is_null(self) -> bool:

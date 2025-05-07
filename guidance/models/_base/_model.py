@@ -49,17 +49,72 @@ def _gen_id():
 S = TypeVar("S", bound=State)
 D = TypeVar("D", bound=Any)
 
+from typing import Generic
 from dataclasses import dataclass, field, InitVar
+from concurrent.futures import Future
+
+@dataclass(frozen=True)
+class InterpreterFuture(Generic[S]):
+    parent: Optional["InterpreterFuture[S]"]
+    op: Union[None, ASTNode, Function, AsyncFunction]
+    fut: Future[Interpreter[S]] = field(init=False, default_factory=Future)
+
+    @classmethod
+    def from_interpreter(cls, interpreter: Interpreter[S]) -> "InterpreterFuture[S]":
+        self = cls(parent=None, op=None)
+        self.set_result(interpreter)
+        return self
+
+    def set_result(self, result: Interpreter[S]) -> None:
+        self.fut.set_result(result)
+
+    def then(self, op: Union[None, ASTNode, Function, AsyncFunction]) -> "InterpreterFuture[S]":
+        return InterpreterFuture(self, op)
+
+    async def result(self) -> Interpreter[S]:
+        if self.fut.done():
+            return self.fut.result()
+        
+        # Otherwise, we should have been set at construction time
+        assert self.parent is not None 
+
+        # First pass: have eager semantics (no pooling)
+        parent_result = await self.parent.result()
+        if self.op is None:
+            result = parent_result
+
+        elif isinstance(self.op, ASTNode):
+            # in-place run
+            result = deepcopy(parent_result)
+            async for attr in result.run(self.op):
+                pass
+
+        elif isinstance(self.op, Function):
+            tmp_model = Model(interpreter=parent_result)
+            intermed_model = await sync_to_reentrant_async(self.op)(tmp_model)
+            interp = intermed_model._interpreter
+            result = await interp.result()
+
+        elif isinstance(self.op, AsyncFunction):
+            tmp_model = Model(interpreter=parent_result)
+            intermed_model = await self.op(tmp_model)
+            interp = intermed_model._interpreter
+            result = await interp.result()
+
+        else:
+            raise TypeError(f"Unsupported operation type: {type(self.op)}")
+        
+        self.set_result(result)
+        return result
 
 @dataclass
 class Model:
-    interpreter: InitVar[Interpreter[S]]
+    interpreter: InitVar[Union[Interpreter[S], InterpreterFuture[S]]]
     echo: bool = True
 
     # Private init attributes
-    _interpreter: Interpreter = field(init=False)
+    _interpreter: InterpreterFuture[S] = field(init=False)
     _parent: Optional["Model"] = None
-    _pending: Union[None, ASTNode, Function] = None
     _active_blocks: tuple["Block", ...] = ()
 
     # Private non-init attributes
@@ -67,8 +122,12 @@ class Model:
     _id: int = field(init=False, default_factory=_gen_id)
     _trace_nodes: set[TraceNode] = field(init=False, default_factory=set)
 
-    def __post_init__(self, interpreter: Interpreter) -> None:
-        self._interpreter = interpreter
+    def __post_init__(self, interpreter: Union[Interpreter[S], InterpreterFuture[S]]) -> None:
+        if isinstance(interpreter, InterpreterFuture):
+            self._interpreter = interpreter
+        else:
+            self._interpreter = InterpreterFuture.from_interpreter(interpreter)
+            
         # Set the parent ID if we have a parent
         if self._parent is not None:
             self._parent_id = self._parent._id
@@ -81,12 +140,16 @@ class Model:
         # we can replace this all with a simple `dataclasses.replace(self, ...)`
         Model.__init__(
             obj,
-            interpreter=deepcopy(self._interpreter),
+            interpreter=InterpreterFuture(
+                parent=self._interpreter.parent,
+                op=self._interpreter.op,
+            ),
             # TODO: should this be our parent? Or is the copy really our child?
             _parent=self,
-            _pending=self._pending,
             _active_blocks=self._active_blocks,
         )
+        if self._interpreter.fut.done():
+            obj._interpreter.fut.set_result(self._interpreter.fut.result())
         return obj
 
     def _update_trace_node(
@@ -113,23 +176,20 @@ class Model:
         self._parent_id = self._id
         self._id = _gen_id()
 
-    def _add_to_pending(self, item: Union[ASTNode, Function]) -> None:
-        if self._pending is None:
-            self._pending = item
-        else:
-            self._pending += item
-
     def __add__(self, other: Union[str, Function, AsyncFunction, ASTNode]) -> Self:
-        self = self.copy()
-        self._apply_blocks()
+        new_active_blocks, op = self._get_updated_blocks_and_op()
         if isinstance(other, str):
-            if other == "":
-                return self
             other = _parse_tags(other)
-        if isinstance(other, (ASTNode, Function, AsyncFunction)):
-            self._add_to_pending(other)
-            return self
-        return NotImplemented
+        if op is None:
+            new_op = other
+        else:
+            new_op = op + other
+        return Model(
+            interpreter=self._interpreter.then(new_op),
+            echo=self.echo,
+            _parent=self,
+            _active_blocks=new_active_blocks,
+        )
 
     def _send_to_event_queue(self) -> None:
         """For streaming"""
@@ -140,35 +200,43 @@ class Model:
         """Return a new model stream object that delays execution until it is iterated over."""
         return ModelStream(self)
 
-    def _apply_blocks(self) -> None:
+    def _get_updated_blocks_and_op(self) -> tuple[tuple["Block", ...], Union[None, ASTNode, Function, AsyncFunction]]:
         global_active_blocks = _active_blocks.get()
         new_active_blocks = []
+        op: Union[None, ASTNode, Function, AsyncFunction] = None
+        def add_op(other: Union[None, str, ASTNode, Function, AsyncFunction]) -> None:
+            nonlocal op
+            if other is None:
+                return
+            if isinstance(other, str):
+                if other == "":
+                    return
+                other = _parse_tags(other)
+            if op is None:
+                op = other
+            else:
+                op += other
+
         for block in reversed(self._active_blocks):
             # Close blocks that are not globally active anymore
             if block not in global_active_blocks:
-                if block.closer is not None:
-                    closer = block.closer
-                    if isinstance(closer, str):
-                        closer = _parse_tags(closer)
-                    self._add_to_pending(closer)
+                add_op(block.opener)
                 if block.name is not None:
-                    self._add_to_pending(CaptureEnd(name=block.name))
+                    add_op(CaptureEnd(name=block.name))
             else:
                 # Not closed, so keep it
                 new_active_blocks.append(block)
+
         new_active_blocks = list(reversed(new_active_blocks))
         for block in global_active_blocks:
             # Open blocks that are not yet locally active
             if block not in self._active_blocks:
                 new_active_blocks.append(block)
                 if block.name is not None:
-                    self._add_to_pending(CaptureStart(name=block.name))
-                if block.opener is not None:
-                    opener = block.opener
-                    if isinstance(opener, str):
-                        opener = _parse_tags(opener)
-                    self._add_to_pending(opener)
-        self._active_blocks = tuple(new_active_blocks)
+                    add_op(CaptureStart(name=block.name))
+                add_op(block.opener)
+
+        return tuple(new_active_blocks), op
 
     def __str__(self) -> str:
         return str(self._get_state())
@@ -261,8 +329,12 @@ class Model:
 
     def __getattribute__(self, name):
         if name == "engine":
-            # For legacy model.engine access (mostly for tests...)
-            return getattr(self._interpreter, "engine")
+            if self._interpreter.fut.done():
+                return getattr(self._interpreter.fut.result(), "engine")
+            else:
+                raise RuntimeError(
+                    "Cannot access engine before the interpreter future is done."
+                )
         return super().__getattribute__(name)
 
     async def run_batched_async(self, items: Sequence[Union[str, Function, AsyncFunction, ASTNode]]) -> Self:
@@ -328,13 +400,17 @@ class Model:
 
     async def _get_state_async(self) -> State:
         """Get the state of the model."""
-        await self._run()
-        return self._interpreter.state
+        token = _below_entry_point.set(True)
+        try:
+            return (await self._interpreter.result()).state
+        finally:
+            _below_entry_point.reset(token)
 
     def _get_state(self) -> State:
         """Get the state of the model."""
-        self._run_sync()
-        return self._interpreter.state
+        if not _below_entry_point.get():
+            return run_async_coroutine_in_bg_async(self._get_state_async())
+        return reentrant_await(self._get_state_async())
 
     async def get_async(self, key: str) -> Any:
         try:
