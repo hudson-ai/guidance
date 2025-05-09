@@ -220,7 +220,7 @@ class Model:
         for block in reversed(self._active_blocks):
             # Close blocks that are not globally active anymore
             if block not in global_active_blocks:
-                add_op(block.opener)
+                add_op(block.closer)
                 if block.name is not None:
                     add_op(CaptureEnd(name=block.name))
             else:
