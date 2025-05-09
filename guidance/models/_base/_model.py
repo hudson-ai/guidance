@@ -7,6 +7,8 @@ from contextvars import ContextVar, copy_context
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Iterator, Optional, TypeVar, Union, Sequence
 from typing_extensions import Self
+from dataclasses import dataclass, field, InitVar
+from concurrent.futures import Future
 
 from ..._ast import (
     ASTNode,
@@ -49,90 +51,43 @@ def _gen_id():
 S = TypeVar("S", bound=State)
 D = TypeVar("D", bound=Any)
 
-from typing import Generic
-from dataclasses import dataclass, field, InitVar
-from concurrent.futures import Future
-
-@dataclass(frozen=True)
-class InterpreterFuture(Generic[S]):
-    parent: Optional["InterpreterFuture[S]"]
-    op: Union[None, ASTNode, Function, AsyncFunction]
-    fut: Future[Interpreter[S]] = field(init=False, default_factory=Future)
-
-    @classmethod
-    def from_interpreter(cls, interpreter: Interpreter[S]) -> "InterpreterFuture[S]":
-        self = cls(parent=None, op=None)
-        self.set_result(interpreter)
-        return self
-
-    def set_result(self, result: Interpreter[S]) -> None:
-        self.fut.set_result(result)
-
-    def then(self, op: Union[None, ASTNode, Function, AsyncFunction]) -> "InterpreterFuture[S]":
-        return InterpreterFuture(self, op)
-
-    async def result(self) -> Interpreter[S]:
-        if self.fut.done():
-            return self.fut.result()
-        
-        # Otherwise, we should have been set at construction time
-        assert self.parent is not None 
-
-        # First pass: have eager semantics (no pooling)
-        parent_result = await self.parent.result()
-        if self.op is None:
-            result = parent_result
-
-        elif isinstance(self.op, ASTNode):
-            # in-place run
-            result = deepcopy(parent_result)
-            async for attr in result.run(self.op):
-                pass
-
-        elif isinstance(self.op, Function):
-            tmp_model = Model(interpreter=parent_result)
-            intermed_model = await sync_to_reentrant_async(self.op)(tmp_model)
-            interp = intermed_model._interpreter
-            result = await interp.result()
-
-        elif isinstance(self.op, AsyncFunction):
-            tmp_model = Model(interpreter=parent_result)
-            intermed_model = await self.op(tmp_model)
-            interp = intermed_model._interpreter
-            result = await interp.result()
-
-        else:
-            raise TypeError(f"Unsupported operation type: {type(self.op)}")
-        
-        self.set_result(result)
-        return result
 
 @dataclass
 class Model:
-    interpreter: InitVar[Union[Interpreter[S], InterpreterFuture[S]]]
+    interpreter: InitVar[Optional[Interpreter[S]]] = None
     echo: bool = True
 
     # Private init attributes
-    _interpreter: InterpreterFuture[S] = field(init=False)
     _parent: Optional["Model"] = None
+    _op: Union[None, ASTNode, Function, AsyncFunction] = None
     _active_blocks: tuple["Block", ...] = ()
 
     # Private non-init attributes
-    _parent_id: Optional[int] = field(init=False, default=None)
+    _interpreter: Future[Interpreter[S]] = field(init=False, default_factory=Future)
     _id: int = field(init=False, default_factory=_gen_id)
+    _parent_id: Optional[int] = field(init=False, default=None)
     _trace_nodes: set[TraceNode] = field(init=False, default_factory=set)
 
-    def __post_init__(self, interpreter: Union[Interpreter[S], InterpreterFuture[S]]) -> None:
-        if isinstance(interpreter, InterpreterFuture):
-            self._interpreter = interpreter
-        else:
-            self._interpreter = InterpreterFuture.from_interpreter(interpreter)
-            
+    def __post_init__(self, interpreter: Optional[Interpreter[S]]) -> None:
+        if interpreter is not None:
+            if self._parent or self._op:
+                raise ValueError(f"Instantiating a model with an interpreter should only be done if it is the root model. Got {self._parent=} and {self._op=}.")
+            self._interpreter.set_result(interpreter)
+        elif self._parent is None:
+            raise ValueError("Model must be instantiated with either an interpreter or a parent model.")
+
         # Set the parent ID if we have a parent
         if self._parent is not None:
             self._parent_id = self._parent._id
+        # Initialize the trace
+        self._update_trace_node(self._id, self._parent_id, None)
 
-    def copy(self) -> Self:
+    def _new_child(
+        self,
+        op: Union[None, ASTNode, Function, AsyncFunction],
+        active_blocks: tuple["Block", ...],
+    ) -> Self:
+        """Create a new child model with the given operation and active blocks."""
         obj = object.__new__(self.__class__)
         obj.__dict__.update(self.__dict__)
         # Use the base-class's __init__ to set up the new object
@@ -140,41 +95,18 @@ class Model:
         # we can replace this all with a simple `dataclasses.replace(self, ...)`
         Model.__init__(
             obj,
-            interpreter=InterpreterFuture(
-                parent=self._interpreter.parent,
-                op=self._interpreter.op,
-            ),
-            # TODO: should this be our parent? Or is the copy really our child?
+            echo=self.echo,
             _parent=self,
-            _active_blocks=self._active_blocks,
+            _op=op,
+            _active_blocks=active_blocks,
         )
-        if self._interpreter.fut.done():
-            obj._interpreter.fut.set_result(self._interpreter.fut.result())
         return obj
 
-    def _update_trace_node(
-        self, identifier: int, parent_id: Optional[int], node_attr: Optional[NodeAttr] = None
-    ) -> None:
-        from ...registry import get_trace_handler, get_renderer
-
-        trace_handler = get_trace_handler()
-        trace_node = trace_handler.update_node(identifier, parent_id, node_attr)
-        self._trace_nodes.add(trace_node)
-        if self.echo:
-            get_renderer().update(
-                TraceMessage(
-                    trace_id=identifier,
-                    parent_trace_id=parent_id,
-                    node_attr=node_attr,
-                ),
-            )
-        pass
-
-    def _increment_trace_id(self) -> None:
-        # This is a bit of a hack to get the trace ids working (only one output attr is allowed per id, so we need to increment.)
-        # Parent will be the real parent, so this is all a bit of a mess. TODO: allow multiple output attrs per id
-        self._parent_id = self._id
-        self._id = _gen_id()
+    def copy(self) -> Self:
+        return self._new_child(
+            op=None,
+            active_blocks=self._active_blocks,
+        )
 
     def __add__(self, other: Union[str, Function, AsyncFunction, ASTNode]) -> Self:
         new_active_blocks, op = self._get_updated_blocks_and_op()
@@ -184,21 +116,93 @@ class Model:
             new_op = other
         else:
             new_op = op + other
-        return Model(
-            interpreter=self._interpreter.then(new_op),
-            echo=self.echo,
-            _parent=self,
-            _active_blocks=new_active_blocks,
+        return self._new_child(
+            op=new_op,
+            active_blocks=new_active_blocks,
         )
 
-    def _send_to_event_queue(self) -> None:
-        """For streaming"""
-        for event_queue in _event_queues.get():
-            event_queue.put(self.copy())
+    async def _block_until_ready(self) -> None:
+        if self._interpreter.done():
+            return
+        # Parent should NOT be none -- passing an interpreter at construction
+        # time should be the only case where this is None.
+        assert self._parent is not None
+        # First pass: have eager semantics (no pooling)
+        await self._parent._block_until_ready()
+        parent_interpreter = self._parent._interpreter.result(timeout=0)
 
-    def stream(self) -> "ModelStream":
-        """Return a new model stream object that delays execution until it is iterated over."""
-        return ModelStream(self)
+        if self._op is None:
+            self._interpreter.set_result(parent_interpreter)
+
+        elif isinstance(self._op, ASTNode):
+            interpreter = deepcopy(parent_interpreter)
+            try:
+                async for attr in interpreter.run(self._op):
+                    self._increment_trace_id()
+                    self._update_trace_node(self._id, self._parent_id, attr)
+                    # Stream current model state
+                    self._send_to_event_queue()
+            except Exception as ex:
+                self._interpreter.set_exception(ex)
+                raise ex
+            else:
+                self._interpreter.set_result(interpreter)
+
+        elif isinstance(self._op, Function):
+            tmp_model = self._new_child(op=None, active_blocks=self._active_blocks)
+            try:
+                intermed_model = await sync_to_reentrant_async(self._op)(tmp_model)
+            except Exception as ex:
+                self._interpreter.set_exception(ex)
+                raise ex
+            else:
+                await intermed_model._block_until_ready()
+                interp = intermed_model._interpreter.result(timeout=0)
+                self._interpreter.set_result(interp)
+            # TODO: do we need to take the intermediate model's trace id / nodes?
+
+        elif isinstance(self._op, AsyncFunction):
+            tmp_model = self._new_child(op=None, active_blocks=self._active_blocks)
+            try:
+                intermed_model = await self._op(tmp_model)
+            except Exception as ex:
+                self._interpreter.set_exception(ex)
+                raise ex
+            else:
+                await intermed_model._block_until_ready()
+                interp = intermed_model._interpreter.result(timeout=0)
+                self._interpreter.set_result(interp)
+            # TODO: do we need to take the intermediate model's trace id / nodes?
+
+        else:
+            raise TypeError(f"Unsupported operation type: {type(self._op)}")
+
+    async def _get_interpreter_async(self) -> Interpreter[S]:
+        if not self._interpreter.done():
+            # Mark that we are below the entry point so that
+            # `_block_until_ready_sync` knows to use `await_` instead of
+            # running in the background thread.
+            token = _below_entry_point.set(True)
+            try:
+                await self._block_until_ready()
+            finally:
+                _below_entry_point.reset(token)
+        return self._interpreter.result(timeout=0)
+
+    def _get_interpreter_sync(self) -> Interpreter[S]:
+        if not _below_entry_point.get():
+            return run_async_coroutine_in_bg_async(self._get_interpreter_async())
+        return reentrant_await(self._get_interpreter_async())
+
+    async def _get_state_async(self) -> State:
+        """Get the state of the model."""
+        interp = await self._get_interpreter_async()
+        return interp.state
+
+    def _get_state(self) -> State:
+        """Get the state of the model."""
+        interp = self._get_interpreter_sync()
+        return interp.state
 
     def _get_updated_blocks_and_op(self) -> tuple[tuple["Block", ...], Union[None, ASTNode, Function, AsyncFunction]]:
         global_active_blocks = _active_blocks.get()
@@ -237,6 +241,39 @@ class Model:
                 add_op(block.opener)
 
         return tuple(new_active_blocks), op
+
+    def _update_trace_node(
+        self, identifier: int, parent_id: Optional[int], node_attr: Optional[NodeAttr] = None
+    ) -> None:
+        from ...registry import get_trace_handler, get_renderer
+
+        trace_handler = get_trace_handler()
+        trace_node = trace_handler.update_node(identifier, parent_id, node_attr)
+        self._trace_nodes.add(trace_node)
+        if self.echo:
+            get_renderer().update(
+                TraceMessage(
+                    trace_id=identifier,
+                    parent_trace_id=parent_id,
+                    node_attr=node_attr,
+                ),
+            )
+        pass
+
+    def _increment_trace_id(self) -> None:
+        # This is a bit of a hack to get the trace ids working (only one output attr is allowed per id, so we need to increment.)
+        # Parent will be the real parent, so this is all a bit of a mess. TODO: allow multiple output attrs per id
+        self._parent_id = self._id
+        self._id = _gen_id()
+
+    def _send_to_event_queue(self) -> None:
+        """For streaming"""
+        for event_queue in _event_queues.get():
+            event_queue.put(self.copy())
+
+    def stream(self) -> "ModelStream":
+        """Return a new model stream object that delays execution until it is iterated over."""
+        return ModelStream(self)
 
     def __str__(self) -> str:
         return str(self._get_state())
@@ -329,17 +366,13 @@ class Model:
 
     def __getattribute__(self, name):
         if name == "engine":
-            if self._interpreter.fut.done():
-                return getattr(self._interpreter.fut.result(), "engine")
-            else:
-                raise RuntimeError(
-                    "Cannot access engine before the interpreter future is done."
-                )
+            interp = self._get_interpreter_sync()
+            return getattr(interp, "engine")
         return super().__getattribute__(name)
 
     async def run_batched_async(self, items: Sequence[Union[str, Function, AsyncFunction, ASTNode]]) -> Self:
         lms = [self + item for item in items]
-        coros = [lm._run() for lm in lms]
+        coros = [lm._block_until_ready() for lm in lms]
         await asyncio.gather(*coros)
         return lms
 
@@ -347,70 +380,6 @@ class Model:
         if not _below_entry_point.get():
             return run_async_coroutine_in_bg_async(self.run_batched_async(items))
         return reentrant_await(self.run_batched_async(items))
-
-    async def _run(self) -> None:
-        # TODO: trace `InputAttr`s
-        async def inner():
-            new_self = self.copy()
-            # may be some pending blocks
-            new_self._apply_blocks()
-            while isinstance(new_self._pending, (Function, AsyncFunction)):
-                func = new_self._pending
-                new_self._pending = None
-                new_self._active_blocks = ()
-                if isinstance(func, AsyncFunction):
-                    new_self = await func(new_self)
-                else:
-                    # If someone awaits us directly (i.e. we're not below an `await_`),
-                    # we need to wrap the sync part in `async_` to avoid blocking our caller's
-                    # event loop.
-                    # Otherwise, this is effectively equivalent to func(new_self)
-                    new_self = await sync_to_reentrant_async(func)(new_self)
-                # may be some pending blocks
-                new_self._apply_blocks()
-            self.__dict__ = new_self.__dict__ # I guess
-            if self._pending is None:
-                return
-
-            assert isinstance(self._pending, ASTNode)
-            node = self._pending
-            self._pending = None
-            await self._run_node(node)
-
-        # Mark that we are below the entry point so that
-        # `_run_sync` knows to use `await_` instead of
-        # running in the background thread.
-        token = _below_entry_point.set(True)
-        try:
-            return await inner()
-        finally:
-            _below_entry_point.reset(token)
-
-    def _run_sync(self) -> None:
-        if not _below_entry_point.get():
-            return run_async_coroutine_in_bg_async(self._run())
-        return reentrant_await(self._run())
-
-    async def _run_node(self, node: ASTNode) -> None:
-        async for node_attr in self._interpreter.run(node):
-            self._increment_trace_id()
-            self._update_trace_node(self._id, self._parent_id, node_attr)
-            # Stream current model state
-            self._send_to_event_queue()
-
-    async def _get_state_async(self) -> State:
-        """Get the state of the model."""
-        token = _below_entry_point.set(True)
-        try:
-            return (await self._interpreter.result()).state
-        finally:
-            _below_entry_point.reset(token)
-
-    def _get_state(self) -> State:
-        """Get the state of the model."""
-        if not _below_entry_point.get():
-            return run_async_coroutine_in_bg_async(self._get_state_async())
-        return reentrant_await(self._get_state_async())
 
     async def get_async(self, key: str) -> Any:
         try:
