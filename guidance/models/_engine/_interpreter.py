@@ -74,9 +74,8 @@ class EngineInterpreter(Interpreter[EngineState]):
 
         delayed_bytes = b""
         for chunk in engine_gen:
-            new_bytes = chunk.new_bytes
-            new_text, delayed_bytes = partial_decode(new_bytes)
-
+            new_bytes = recode_special_tokens(self.engine.tokenizer, chunk.new_bytes)
+            new_text, delayed_bytes = partial_decode(delayed_bytes + new_bytes)
             # Update the state
             self.state.prompt += new_text
             yield TextOutput(value=new_text, token_count=chunk.new_token_count, is_generated=True)
@@ -168,6 +167,14 @@ def partial_decode(data: bytes) -> tuple[str, bytes]:
         valid_part = data[: e.start].decode("utf-8")
         delayed_part = data[e.start :]
     return (valid_part, delayed_part)
+
+LLG_SPECIAL_TOKEN_PAT = re.compile(b"\xff\[([0-9]+)\]")
+def recode_special_tokens(tokenizer: Tokenizer, data: bytes) -> bytes:
+    """Recode a byte string with special tokens in llguidance format to their actual byte representation."""
+    return LLG_SPECIAL_TOKEN_PAT.sub(
+        lambda m: tokenizer.decode([int(m.group(1).decode("utf-8"))]),
+        data
+    )
 
 def text_to_grammar(tokenizer: Tokenizer, text: str) -> GrammarNode:
     """
