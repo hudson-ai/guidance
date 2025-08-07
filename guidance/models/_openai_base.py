@@ -432,9 +432,9 @@ class OpenAIGrammarMixin(BaseOpenAIInterpreter):
             parallel_tool_calls=False,
             **kwargs,
         ):
+            yield attr
             if isinstance(attr, TextOutput):
                 buffer += attr.value
-                yield attr
             matches = node.match(
                 buffer,
                 raise_exceptions=False,
