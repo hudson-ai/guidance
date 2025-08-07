@@ -13,6 +13,7 @@ from .._ast import (
     ASTNode,
     AudioBlob,
     GenAudio,
+    GrammarNode,
     ImageBlob,
     ImageUrl,
     JsonNode,
@@ -403,6 +404,77 @@ class BaseOpenAIInterpreter(Interpreter[OpenAIState]):
             else:
                 setattr(result, k, deepcopy(v, memo))
         return result
+
+
+class OpenAIGrammarMixin(BaseOpenAIInterpreter):
+    logprobs = False
+
+    def grammar(self, node: GrammarNode, **kwargs) -> Iterator[OutputAttr]:
+        yield from self._run(
+            tools=[
+                {
+                    "type": "custom",
+                    "custom": {
+                        "name": "custom_response_format",
+                        "description": "Custom response format",
+                        "format": {
+                            "type": "grammar",
+                            "grammar": {
+                                "syntax": "lark",
+                                "definition": node.ll_grammar(),
+                            },
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+            parallel_tool_calls=False,
+            **kwargs,
+        )
+
+    def _handle_stream(self, chunks: Iterator["ChatCompletionChunk"]) -> Iterator[OutputAttr]:
+        _t0 = time.time()
+        t0 = _t0
+        usage = TokenUsage(round_trips=1)
+        for chunk in chunks:
+            t1 = time.time()
+            latency_ms = (t1 - t0) * 1000
+            t0 = t1
+
+            # NOTE: use getattr here as litellm does not return usage
+            if getattr(chunk, "usage", None) is not None:
+                # Update token usage
+                usage.input_tokens += chunk.usage.prompt_tokens
+                # Estimate forward passes as number of completion tokens
+                usage.forward_passes += chunk.usage.completion_tokens
+                if getattr(chunk.usage, "prompt_tokens_details", None) is not None:
+                    if chunk.usage.prompt_tokens_details.cached_tokens is not None:
+                        usage.cached_input_tokens += chunk.usage.prompt_tokens_details.cached_tokens
+            if chunk.choices is None or len(chunk.choices) == 0:
+                # Azure seems to return empty choices sometimes (on first chunk?)
+                # OpenAI seems to return None choices sometimes (after giving usage?) (for audio only?)
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            assert delta.content is None, "OpenAIGrammarMixin should not return content in delta"
+            if delta.tool_calls is not None and len(delta.tool_calls) > 0:
+                assert len(delta.tool_calls) == 1
+                tc = delta.tool_calls[0]
+                assert hasattr(tc, "custom")
+                assert isinstance(tc.custom, dict)
+                text = tc.custom.get("input")
+                assert isinstance(text, str), f"Expected string input, got {type(text)}"
+                self.state.apply_text(text)
+                yield TextOutput(value=text, is_generated=True, latency_ms=latency_ms)
+
+            elif getattr(delta, "refusal", None) is not None:
+                raise ValueError(f"OpenAI refused the request: {delta.refusal}")
+
+            if choice.finish_reason is not None and choice.finish_reason != "stop":
+                # TODO: handle "bad" finish reasons
+                pass
+        usage.total_latency_ms += (time.time() - _t0) * 1000
+        self.state.add_usage(usage)
 
 
 class OpenAIRuleMixin(BaseOpenAIInterpreter):

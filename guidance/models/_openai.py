@@ -7,6 +7,7 @@ from ._openai_base import (
     BaseOpenAIInterpreter,
     OpenAIAudioMixin,
     OpenAIClientWrapper,
+    OpenAIGrammarMixin,
     OpenAIImageMixin,
     OpenAIJSONMixin,
     OpenAIRegexMixin,
@@ -62,6 +63,8 @@ class OpenAI(Model):
             interpreter_cls = type("OpenAIAudioInterpreter", (OpenAIAudioMixin, OpenAIInterpreter), {})
         elif model.startswith("gpt-4o") or model.startswith("o1"):
             interpreter_cls = type("OpenAIImageInterpreter", (OpenAIImageMixin, OpenAIInterpreter), {})
+        elif "gpt-5" in model:
+            interpreter_cls = type("OpenAIGrammarInterpreter", (OpenAIGrammarMixin, OpenAIInterpreter), {})
         else:
             interpreter_cls = OpenAIInterpreter
 
