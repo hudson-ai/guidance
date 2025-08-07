@@ -410,7 +410,8 @@ class OpenAIGrammarMixin(BaseOpenAIInterpreter):
     logprobs = False
 
     def grammar(self, node: GrammarNode, **kwargs) -> Iterator[OutputAttr]:
-        yield from self._run(
+        buffer: str = ""
+        for attr in self._run(
             tools=[
                 {
                     "type": "custom",
@@ -430,7 +431,29 @@ class OpenAIGrammarMixin(BaseOpenAIInterpreter):
             tool_choice="required",
             parallel_tool_calls=False,
             **kwargs,
-        )
+        ):
+            if isinstance(attr, TextOutput):
+                buffer += attr.value
+                yield attr
+            matches = node.match(
+                buffer,
+                raise_exceptions=False,
+                # Turn of max_tokens since we don't have access to the tokenizer
+                enforce_max_tokens=False,
+            )
+            if matches is None:
+                # TODO: should probably raise...
+                pass
+            else:
+                for name, value in matches.captures.items():
+                    log_probs = matches.log_probs[name]
+                    if isinstance(value, list):
+                        assert isinstance(log_probs, list)
+                        assert len(value) == len(log_probs)
+                        for v, l in zip(value, log_probs):
+                            yield self.state.apply_capture(name=name, value=v, log_prob=l, is_append=True)
+                    else:
+                        yield self.state.apply_capture(name=name, value=value, log_prob=None, is_append=False)
 
     def _handle_stream(self, chunks: Iterator["ChatCompletionChunk"]) -> Iterator[OutputAttr]:
         _t0 = time.time()
